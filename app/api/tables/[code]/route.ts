@@ -1,11 +1,14 @@
+import { requireUser } from "@/lib/guard";
 import { dealFirstHand, failure, joinTable, playerAction, readTable } from "@/lib/tables";
 
-// Each player's secret token (from creating or joining) travels in this header and is the only proof of who they are.
+// Signed in to reach a table at all; then each player's secret seat token (from creating or joining) travels in this header and proves which seat is theirs.
 const tokenOf = (req: Request) => req.headers.get("x-table-token") ?? "";
 const ACTIONS = new Set(["fold", "check", "call", "raise", "rebuy"]);
 
 /** The table as you see it. Polled by every player; also applies turn timeouts and deals the next hand. */
 export async function GET(req: Request, ctx: RouteContext<"/api/tables/[code]">) {
+  const userId = await requireUser(req);
+  if (userId instanceof Response) return userId;
   const { code } = await ctx.params;
   try {
     return Response.json(await readTable(code, tokenOf(req)));
@@ -16,6 +19,8 @@ export async function GET(req: Request, ctx: RouteContext<"/api/tables/[code]">)
 
 /** Body: { op: "join", name } | { op: "deal" } | { op: "act", action: { type, amount? } } */
 export async function POST(req: Request, ctx: RouteContext<"/api/tables/[code]">) {
+  const userId = await requireUser(req);
+  if (userId instanceof Response) return userId;
   const { code } = await ctx.params;
   const body = await req.json().catch(() => ({}));
   try {

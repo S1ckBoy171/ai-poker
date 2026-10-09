@@ -4,8 +4,8 @@ import type { HandRecord } from "@/lib/poker";
 
 /** Body: { gameId, hand: HandRecord } - sent by the table when a hand finishes. */
 export async function POST(req: Request) {
-  const denied = ownPageOnly(req);
-  if (denied) return denied;
+  const userId = await ownPageOnly(req);
+  if (userId instanceof Response) return userId;
   const text = await req.text();
   if (text.length > 100_000) return Response.json({ error: "too large" }, { status: 413 });
   let body: { gameId?: unknown; hand?: Partial<HandRecord> };
@@ -22,6 +22,6 @@ export async function POST(req: Request) {
     hand!.number! > 0 &&
     [hand!.board, hand!.history, hand!.players, hand!.winners].every(Array.isArray);
   if (!ok) return Response.json({ error: "bad request" }, { status: 400 });
-  await saveHand(gameId, hand as HandRecord);
+  await saveHand(userId, gameId, hand as HandRecord);
   return Response.json({ ok: true });
 }

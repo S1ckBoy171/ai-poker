@@ -7,33 +7,39 @@ datasource db {
   provider = "postgresql"
 }
 
-/// Single row with table + agent settings; shape is validated by normalize() in lib/config.ts.
+/// Each account's bot-match settings (table + agents); shape is validated by normalize() in lib/config.ts.
 model Settings {
-  id     Int  @id @default(1)
+  userId String @id @map("user_id")
   config Json
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("settings")
 }
 
 /// One key per provider ("anthropic" | "openai" | "openrouter") plus optional per-seat overrides ("seat:0".."seat:8").
 model ApiKey {
-  id        String   @id
+  userId    String   @map("user_id") // keys belong to one account: nobody else's bot seats can spend them
+  id        String
   key       String
   updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@id([userId, id])
   @@map("api_keys")
 }
 
 /// One finished hand, as the table saw it (board, actions, winners, shown cards). Never the remaining deck.
 model Hand {
   id        Int      @id @default(autoincrement())
+  userId    String   @map("user_id") // whose bot match it was; each account sees only its own history
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   gameId    String   @map("game_id")
   number    Int
   data      Json
   createdAt DateTime @default(now()) @map("created_at")
 
   @@unique([gameId, number])
-  @@index([createdAt])
+  @@index([userId, createdAt])
   @@map("hands")
 }
 
@@ -60,6 +66,9 @@ model User {
   updatedAt     DateTime  @updatedAt
   sessions      Session[]
   accounts      Account[]
+  settings      Settings?
+  apiKeys       ApiKey[]
+  hands         Hand[]
 
   @@unique([email])
   @@index([createdAt])

@@ -12,12 +12,12 @@ const OPENAI_NOT_CHAT = /(audio|realtime|tts|transcribe|image|embedding|moderati
 
 /** Body: { provider, key? } - checks the key with the provider and lists the models it can use. No key = the saved one. */
 export async function POST(req: Request) {
-  const denied = ownPageOnly(req);
-  if (denied) return denied;
+  const userId = await ownPageOnly(req);
+  if (userId instanceof Response) return userId;
   const { provider, key: typed } = (await req.json().catch(() => ({}))) as { provider?: unknown; key?: unknown };
   if (typeof provider !== "string" || !Object.hasOwn(PROVIDERS, provider)) return Response.json({ error: "bad request" }, { status: 400 });
   const p = provider as Provider;
-  const key = (typeof typed === "string" && typed.trim().slice(0, 400)) || (await getKey(p));
+  const key = (typeof typed === "string" && typed.trim().slice(0, 400)) || (await getKey(userId, p));
   if (!key) return Response.json({ error: `Enter your ${PROVIDERS[p].label} API key.` }, { status: 400 });
   try {
     const models = p === "anthropic" ? await anthropic(key, req.signal) : p === "openai" ? await openai(key, req.signal) : await openrouter(key, req.signal);

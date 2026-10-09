@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
+import { auth } from "@/lib/auth";
 import { recentHands } from "@/lib/db";
 import { Card } from "../ui";
 
@@ -13,7 +16,7 @@ export default function HistoryPage() {
       <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-display text-4xl font-bold tracking-wide text-white sm:text-5xl">HAND HISTORY</h1>
-          <p className="mt-1 text-sm text-cream/70">The last 200 hands, newest first. Your game keeps running in the table tab.</p>
+          <p className="mt-1 text-sm text-cream/70">Your last 200 hands against bots, newest first. Your game keeps running in the table tab.</p>
         </div>
         <Link href="/play" className="btn-gold">
           TABLE
@@ -28,7 +31,9 @@ export default function HistoryPage() {
 
 async function Hands() {
   await connection(); // read the DB on every request
-  const rows = await recentHands();
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) redirect("/login?next=/history");
+  const rows = await recentHands(session.user.id); // only this account's games
   if (!rows.length) return <p className="text-cream/70">No hands played yet. Finished hands show up here.</p>;
   const games = Map.groupBy(rows, (r) => r.gameId);
   const when = (d: Date) => d.toLocaleString("en", { dateStyle: "medium", timeStyle: "short" });

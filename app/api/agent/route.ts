@@ -6,14 +6,14 @@ import { system } from "@/lib/poker";
 
 type Call = { agent: Agent; key: string; prompt: string; signal: AbortSignal };
 
-/** Body: { seat, prompt }. Provider, model, effort and key come from the DB, never from the browser. */
+/** Body: { seat, prompt }. Provider, model, effort and key come from this account's saved settings, never from the browser. */
 export async function POST(req: Request) {
-  const denied = ownPageOnly(req);
-  if (denied) return denied;
+  const userId = await ownPageOnly(req);
+  if (userId instanceof Response) return userId;
   const { seat, prompt } = (await req.json().catch(() => ({}))) as { seat?: unknown; prompt?: unknown };
-  const agent = Number.isInteger(seat) ? (await getConfig()).agents[seat as number] : undefined;
+  const agent = Number.isInteger(seat) ? (await getConfig(userId)).agents[seat as number] : undefined;
   if (!agent || typeof prompt !== "string" || prompt.length > 20_000) return Response.json({ error: "bad request" }, { status: 400 });
-  const key = await getAgentKey(seat as number, agent.provider);
+  const key = await getAgentKey(userId, seat as number, agent.provider);
   if (!key) return Response.json({ error: `no ${PROVIDERS[agent.provider].label} API key saved` }, { status: 400 });
   try {
     const call = { agent, key, prompt, signal: req.signal };
