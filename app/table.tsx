@@ -15,16 +15,49 @@ export type LogEntry = { id: number; text: string; say?: string; kind?: "hand" |
 
 const POT: Point = { x: 50, y: 39 }; // where the pot pill sits
 const BOARD_DELAY = [0, 110, 220, 0, 0]; // flop cards land one after another
-const DEAL_STEP_MS = 55; // between hole cards as they go round the table
+const CHIPS_NEAR_YOU = 0.45; // your bet and winnings sit this far out: further and your own big cards hide them
+const DEAL_STEP_MS = 70; // between hole cards as they go round the table
+const DEAL_FLIGHT_MS = 320; // a card's trip from the deck to a seat (matches .deal-fly in globals.css)
+const FLICK_MS = 240; // one flick of the dealer's hand (matches .robot-flick in globals.css)
 const SOUND_GAP_MS = 140; // between sounds for one game update
 
-/** Seat `index` of `count` on an oval of `radius` (1 = the rim): index 0 at the bottom, then clockwise. */
-function pointOnOval(index: number, count: number, radius: number, rotation = 0): Point {
-  const angle = Math.PI / 2 + (index * 2 * Math.PI) / count + rotation;
+/** Seats are evenly spaced around the oval: position 0 at the bottom, then clockwise. */
+const seatAngle = (position: number, count: number) => Math.PI / 2 + (position * 2 * Math.PI) / count;
+
+/**
+ * Where the robot dealer stands, without moving any seat: top center when that spot is free (an odd number of
+ * players); otherwise someone sits there, so the dealer stands in the gap to their left.
+ */
+function dealerAngle(count: number): number {
+  const top = (3 * Math.PI) / 2;
+  if (count % 2 === 1) {
+    return top;
+  }
+  const halfGap = Math.PI / count;
+  return top - Math.min(halfGap, Math.PI / 4);
+}
+
+/** The point at `angle` on an oval of `radius` (1 = the rim), in % of the table box. */
+function pointOnOval(angle: number, radius: number): Point {
   return { x: 50 + 50 * radius * Math.cos(angle), y: 50 + 50 * radius * Math.sin(angle) };
 }
 
 const place = (point: Point): CSSProperties => ({ left: `${point.x}%`, top: `${point.y}%` });
+
+/**
+ * Style for a hole card flying from the dealer's deck to a seat. The deck is drawn with the robot, a fixed
+ * distance below its spot on the rim (--deck-drop in globals.css), so the start is offset from `dealerSpot`.
+ */
+function flyFromDeck(dealerSpot: Point, to: Point, delay: number) {
+  return {
+    ...place(to),
+    "--fx": `${dealerSpot.x}%`,
+    "--fy": `calc(${dealerSpot.y}% + var(--deck-drop))`,
+    "--tx": `${to.x}%`,
+    "--ty": `${to.y}%`,
+    animationDelay: `${delay}ms, ${delay + DEAL_FLIGHT_MS}ms`,
+  } as CSSProperties;
+}
 
 /** Style for a `.fly` element: slides from one table point to another, resting at `to`. */
 function fly(from: Point, to: Point) {
@@ -123,8 +156,13 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
   /** Where something for `seat` sits, turning the table so your own seat is at the bottom. */
   const seatPoint = (seat: number, radius: number, rotation = 0) => {
     const position = me >= 0 ? (seat - me + seatCount) % seatCount : seat;
-    return pointOnOval(position, seatCount, radius, rotation);
+    return pointOnOval(seatAngle(position, seatCount) + rotation, radius);
   };
+  const dealerSpot = pointOnOval(dealerAngle(seatCount), 1);
+  const dealtCards = game.players.reduce((sum, player) => sum + player.cards.length, 0);
+  const holeCardsMs = dealtCards ? (dealtCards - 1) * DEAL_STEP_MS + DEAL_FLIGHT_MS : 0;
+  // The dealer's hand flicks for as long as hole cards are going out, then once per board card.
+  const flicks = { preflop: Math.ceil(holeCardsMs / FLICK_MS), flop: 3, turn: 1, river: 1, done: 0 }[game.street];
   const pot = potTotal(game);
   const showdown = isShowdown(game);
   const winningSeats = new Set(game.winners.map((winner) => winner.seat));
@@ -137,9 +175,13 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
     return `${who} ${winner.amount.toLocaleString()}${withHand}`;
   };
   const thinkingText = thinking?.secs === undefined ? "thinking" : `thinking ${thinking.secs}s`;
+  /** How far out chips sit for `seat`: closer in for you, since your own big cards cover the edge of your seat. */
+  const chipRadius = (seat: number, usual: number) => (seat === me ? CHIPS_NEAR_YOU : usual);
 
   return (
     <div className="table-box">
+      {/* drawn before the rail, so the table hides the dealer's lower half */}
+      <RobotDealer hand={game.hand} style={place(dealerSpot)} />
       <div className="rail absolute inset-0 rounded-[50%] p-[2.4%]">
         <div className="felt relative h-full w-full rounded-[50%]">
           <div className="absolute inset-[6%] rounded-[50%] border-2 border-[#ffd9a8]/15" />
@@ -148,6 +190,7 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
           </div>
         </div>
       </div>
+      <RobotHands key={`${game.hand}-${game.street}`} flicks={flicks} style={place(dealerSpot)} />
 
       <div className="absolute left-1/2 top-1/2 z-[6] flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-2 sm:gap-3">
         {game.winners.length > 0 && (
@@ -189,23 +232,40 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
         )}
       </div>
 
+      {/* hole cards: the dealer sends them round the table from the deck, two each, starting left of the button */}
+      {game.street === "preflop" &&
+        game.players.flatMap((player, seat) =>
+          player.cards.map((_, round) => {
+            const delay = dealDelay(seat, round);
+            return (
+              <div
+                key={`${game.hand}-deal-${seat}-${round}`}
+                className="fly deal-fly z-[9]"
+                style={flyFromDeck(dealerSpot, seatPoint(seat, 0.97), delay)}
+              >
+                <div className={`card-back ${DIMS.sm}`} />
+              </div>
+            );
+          }),
+        )}
+
       {/* chips: into a bet, bets into the pot at the end of a street, the pot out to the winners */}
       {game.players.map(
         (player, seat) =>
           player.bet > 0 && (
-            <div key={`${game.hand}-${seat}-${player.bet}`} className="fly chips-in z-[5]" style={fly(seatPoint(seat, 0.84), seatPoint(seat, 0.6))}>
+            <div key={`${game.hand}-${seat}-${player.bet}`} className="fly chips-in z-[5]" style={fly(seatPoint(seat, 0.84), seatPoint(seat, chipRadius(seat, 0.6)))}>
               <Chips amount={player.bet} />
             </div>
           ),
       )}
       {game.swept.map((bet) => (
-        <div key={`${game.hand}-${bet.street}-${bet.seat}`} className="fly chips-sweep z-[5]" style={fly(seatPoint(bet.seat, 0.6), POT)}>
+        <div key={`${game.hand}-${bet.street}-${bet.seat}`} className="fly chips-sweep z-[5]" style={fly(seatPoint(bet.seat, chipRadius(bet.seat, 0.6)), POT)}>
           <Chips amount={bet.amount} />
         </div>
       ))}
       {game.street === "done" &&
         game.winners.map((winner) => (
-          <div key={`${game.hand}-won-${winner.seat}`} className="fly chips-win z-[7]" style={fly(POT, seatPoint(winner.seat, 0.78))}>
+          <div key={`${game.hand}-won-${winner.seat}`} className="fly chips-win z-[7]" style={fly(POT, seatPoint(winner.seat, chipRadius(winner.seat, 0.78)))}>
             <Chips amount={winner.amount} plus />
           </div>
         ))}
@@ -232,11 +292,146 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
           faceUp={seat === me || !!reveal || (showdown && !player.folded)}
           winningCards={winningCards}
           hand={game.hand}
-          dealDelay={(round) => dealDelay(seat, round)}
+          dealDelay={(round) => dealDelay(seat, round) + DEAL_FLIGHT_MS}
           timer={timer?.seat === seat && paused == null ? timer : undefined}
           style={place(seatPoint(seat, 1))}
         />
       ))}
+    </div>
+  );
+}
+
+/** The robot dealer, dressed for the casino, standing behind the table at `style`'s point on the rim. Its eyes flash as each new hand is dealt. */
+function RobotDealer({ hand, style }: { hand: number; style: CSSProperties }) {
+  return (
+    <div className="robot-dealer pointer-events-none absolute" style={style} aria-hidden>
+      <svg viewBox="0 0 120 160" className="h-auto w-full">
+        <defs>
+          <linearGradient id="robot-metal" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#f4efe6" />
+            <stop offset="0.55" stopColor="#c9c2b6" />
+            <stop offset="1" stopColor="#8d857a" />
+          </linearGradient>
+        </defs>
+        <rect x="53" y="48" width="14" height="13" fill="#8d857a" stroke="#2a0a0c" strokeWidth="2" />
+        {/* white shirt, black waistcoat with gold trim, bow tie and a gold name badge */}
+        <path d="M8 160 C10 92 26 64 46 60 H74 C94 64 110 92 112 160 Z" fill="#f4efe6" stroke="#2a0a0c" strokeWidth="2.5" />
+        <path d="M24 76 C30 66 38 62 46 60 L58 100 V160 H14 C14 120 17 92 24 76 Z" fill="#1c1517" stroke="#c99a4a" strokeWidth="1.5" />
+        <path d="M96 76 C90 66 82 62 74 60 L62 100 V160 H106 C106 120 103 92 96 76 Z" fill="#1c1517" stroke="#c99a4a" strokeWidth="1.5" />
+        <circle cx="60" cy="80" r="1.4" fill="#c9c2b6" />
+        <circle cx="60" cy="90" r="1.4" fill="#c9c2b6" />
+        <path d="M49 57 L60 65 L52 70 Z M71 57 L60 65 L68 70 Z" fill="#ffffff" stroke="#c9c2b6" strokeWidth="1" />
+        <path d="M47 61 L60 66 L47 71 Z M73 61 L60 66 L73 71 Z" fill="#121012" />
+        <rect x="56.5" y="63.5" width="7" height="5" rx="1.5" fill="#2b2326" />
+        <rect x="76" y="73" width="18" height="6" rx="1.5" fill="#e8c27a" />
+        <path d="M79 76h12" stroke="#7a5a26" strokeWidth="1.2" />
+        <g className="robot-head">
+          <line x1="60" y1="5" x2="60" y2="15" stroke="#8d857a" strokeWidth="3" strokeLinecap="round" />
+          <circle className="robot-light" cx="60" cy="5" r="4.5" fill="#ffd27a" />
+          <rect x="21" y="26" width="11" height="16" rx="4" fill="#8d857a" stroke="#2a0a0c" strokeWidth="2" />
+          <rect x="88" y="26" width="11" height="16" rx="4" fill="#8d857a" stroke="#2a0a0c" strokeWidth="2" />
+          <rect x="28" y="13" width="64" height="40" rx="16" fill="url(#robot-metal)" stroke="#2a0a0c" strokeWidth="2.5" />
+          <rect x="36" y="21" width="48" height="19" rx="9.5" fill="#1a0508" />
+          <g key={hand} className="robot-look">
+            <rect className="robot-eye" x="44" y="25.5" width="10" height="10" rx="5" fill="#ffd27a" />
+            <rect className="robot-eye" x="66" y="25.5" width="10" height="10" rx="5" fill="#ffd27a" />
+          </g>
+          <path d="M52 45 Q60 50 68 45" fill="none" stroke="#6b645b" strokeWidth="2.5" strokeLinecap="round" />
+        </g>
+      </svg>
+    </div>
+  );
+}
+
+type Joint = { x: number; y: number };
+
+const SLEEVE = "#f4efe6";
+const OUTLINE = "#2a0a0c";
+
+/** A point `t` of the way from `a` to `b`. */
+const between = (a: Joint, b: Joint, t: number): Joint => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+
+/** One sleeve segment, outlined, as thick round-ended strokes. */
+function Sleeve({ from, to }: { from: Joint; to: Joint }) {
+  return (
+    <>
+      <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={OUTLINE} strokeWidth="16" strokeLinecap="round" />
+      <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={SLEEVE} strokeWidth="12" strokeLinecap="round" />
+    </>
+  );
+}
+
+type DealerArmProps = {
+  shoulder: Joint;
+  elbow: Joint; // out to the side, resting on the rail
+  wrist: Joint; // on the felt, beside the deck
+  dealing?: { flicks: number }; // the forearm swings out from the elbow this many times
+};
+
+/**
+ * A casino dealer's arm: white shirt sleeve with a gold garter above the elbow, a black cuff, and a metal mitten
+ * of a hand. The upper arm hangs from the shoulder, the forearm rests on the table, angled in toward the deck.
+ */
+function DealerArm({ shoulder, elbow, wrist, dealing }: DealerArmProps) {
+  const garterFrom = between(shoulder, elbow, 0.45);
+  const garterTo = between(shoulder, elbow, 0.62);
+  const cuffFrom = between(elbow, wrist, 0.72);
+  const handAngle = (Math.atan2(wrist.y - elbow.y, wrist.x - elbow.x) * 180) / Math.PI;
+  const hand = between(elbow, wrist, 1.22);
+  return (
+    <>
+      <Sleeve from={shoulder} to={elbow} />
+      <line x1={garterFrom.x} y1={garterFrom.y} x2={garterTo.x} y2={garterTo.y} stroke="#c99a4a" strokeWidth="12" />
+      <g
+        className={dealing ? "robot-flick" : undefined}
+        style={dealing ? { animationIterationCount: dealing.flicks, transformOrigin: `${elbow.x}px ${elbow.y}px` } : undefined}
+      >
+        <Sleeve from={elbow} to={wrist} />
+        <line x1={cuffFrom.x} y1={cuffFrom.y} x2={wrist.x} y2={wrist.y} stroke="#121012" strokeWidth="12" strokeLinecap="round" />
+        {/* covers where the forearm's outline crosses the upper sleeve, so the elbow bends smoothly */}
+        <circle cx={elbow.x} cy={elbow.y} r="6" fill={SLEEVE} />
+        {dealing && (
+          <rect
+            x={hand.x - 3}
+            y={hand.y - 4}
+            width="15"
+            height="10"
+            rx="2"
+            fill="#a3182a"
+            stroke="#f3dcb5"
+            strokeWidth="1.5"
+            transform={`rotate(${handAngle} ${hand.x} ${hand.y})`}
+          />
+        )}
+        <ellipse
+          cx={hand.x}
+          cy={hand.y}
+          rx="8"
+          ry="6.5"
+          fill="url(#robot-metal)"
+          stroke={OUTLINE}
+          strokeWidth="2"
+          transform={`rotate(${handAngle} ${hand.x} ${hand.y})`}
+        />
+      </g>
+    </>
+  );
+}
+
+/**
+ * The dealer's arms and hands, in front of the rail, either side of the deck it deals from. Same box as RobotDealer,
+ * so they line up. The left forearm flicks `flicks` times as cards go out (remount it to deal again).
+ */
+function RobotHands({ flicks, style }: { flicks: number; style: CSSProperties }) {
+  return (
+    <div className="robot-hands pointer-events-none absolute z-[5]" style={style} aria-hidden>
+      <svg viewBox="0 0 120 160" className="h-auto w-full">
+        {/* the deck, lying on the felt */}
+        <rect x="51" y="128" width="20" height="13" rx="2" fill="#6e0d18" stroke="#f3dcb5" strokeWidth="1.5" />
+        <rect x="50" y="126" width="20" height="13" rx="2" fill="#a3182a" stroke="#f3dcb5" strokeWidth="1.5" />
+        <DealerArm shoulder={{ x: 94, y: 70 }} elbow={{ x: 106, y: 101 }} wrist={{ x: 86, y: 122 }} />
+        <DealerArm shoulder={{ x: 26, y: 70 }} elbow={{ x: 14, y: 101 }} wrist={{ x: 34, y: 122 }} dealing={{ flicks }} />
+      </svg>
     </div>
   );
 }

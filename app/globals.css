@@ -24,12 +24,15 @@ body {
 
 /* ---- table ---- */
 .table-box {
+  --robot-w: 4.5rem; /* the dealer's width; see .robot-dealer */
+  --deck-drop: calc(var(--robot-w) * 0.275);
   position: relative;
   aspect-ratio: 3 / 4;
   width: min(100%, calc((100dvh - 400px) * 0.75));
 }
 @media (min-width: 640px) {
   .table-box {
+    --robot-w: 8.5rem;
     aspect-ratio: 2 / 1;
     width: min(100%, 1000px, calc((100dvh - 280px) * 2));
   }
@@ -345,6 +348,96 @@ select:focus-visible {
     opacity: 0;
   }
 }
+/* ---- the robot dealer ----
+   RobotDealer (behind the rail) and RobotHands (in front of it) share one 120x160 box. Its rim line is at
+   y=100, so the box rises 100/160 of its height above its spot on the rim, and the deck it deals from
+   (centered at y=133) lies (133-100)/120 of its width below that spot. */
+.robot-dealer,
+.robot-hands {
+  width: var(--robot-w);
+  translate: -50% -62.5%;
+  filter: drop-shadow(0 8px 14px rgba(0, 0, 0, 0.5));
+}
+.robot-head {
+  animation: robot-bob 3.2s ease-in-out infinite;
+}
+@keyframes robot-bob {
+  50% {
+    transform: translateY(-3px);
+  }
+}
+.robot-light {
+  animation: robot-light 1.6s ease-in-out infinite;
+}
+@keyframes robot-light {
+  50% {
+    fill: #fff3cf;
+  }
+}
+/* the eyes scan the table now and then */
+.robot-look {
+  animation: robot-look 7s ease-in-out infinite;
+}
+@keyframes robot-look {
+  0%,
+  18%,
+  80%,
+  100% {
+    transform: translateX(0);
+  }
+  28%,
+  42% {
+    transform: translateX(-4px);
+  }
+  55%,
+  70% {
+    transform: translateX(4px);
+  }
+}
+/* blinking; on a new hand (the eyes remount) they also flash bright while the cards go out */
+.robot-eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation:
+    robot-blink 4.6s ease-in-out infinite,
+    robot-deal 1.4s ease-out;
+}
+@keyframes robot-blink {
+  0%,
+  93%,
+  100% {
+    transform: scaleY(1);
+  }
+  96% {
+    transform: scaleY(0.12);
+  }
+}
+@keyframes robot-deal {
+  0%,
+  55% {
+    fill: #fffbe8;
+  }
+}
+/* the dealing forearm swings out from the elbow once per flick; the count and the elbow are set inline */
+.robot-flick {
+  transform-box: view-box;
+  animation: robot-flick 0.24s ease-in-out 0;
+}
+@keyframes robot-flick {
+  50% {
+    transform: rotate(-32deg);
+  }
+}
+/* one hole card flying from the deck to a seat, gone once the seat's own card is there (delays set inline) */
+.deal-fly {
+  animation:
+    fly 0.32s cubic-bezier(0.3, 0.7, 0.4, 1) both,
+    vanish 0.08s linear forwards;
+}
+.deal-fly .card-back {
+  animation: none;
+}
+
 .dealer-btn {
   transition:
     left 0.6s cubic-bezier(0.4, 0, 0.2, 1),
@@ -415,7 +508,8 @@ select:focus-visible {
     transition: none !important;
   }
   .chips-sweep,
-  .chips-win {
+  .chips-win,
+  .deal-fly {
     display: none;
   }
 }
