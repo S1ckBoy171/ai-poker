@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
+import { authClient } from "@/lib/auth-client";
 import { PROVIDERS, type Config, type Provider } from "@/lib/config";
 import type { ModelOption } from "./api/models/route";
 
@@ -45,6 +46,11 @@ export default function Home() {
   const [starting, setStarting] = useState(false);
   const [friend, setFriend] = useState({ name: "", stack: 1000, bb: 20, code: "" });
   const [friendError, setFriendError] = useState("");
+  const { data: session } = authClient.useSession();
+  const signOut = async () => {
+    await authClient.signOut();
+    router.push("/login");
+  };
 
   useEffect(() => {
     fetch("/api/settings")
@@ -118,7 +124,7 @@ export default function Home() {
   const createTable = async (e: FormEvent) => {
     e.preventDefault();
     setFriendError("");
-    const res = await fetch("/api/tables", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(friend) });
+    const res = await fetch("/api/tables", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...friend, name: friend.name || session?.user.name }) });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) return setFriendError(j.error ?? "Could not create the table.");
     try {
@@ -155,6 +161,10 @@ export default function Home() {
           <Link href="/history" className="rounded-full px-3 py-1.5 text-cream/80 ring-1 ring-gold/30 transition-colors hover:bg-black/30 hover:text-cream">
             History
           </Link>
+          {session && <span className="ml-2 hidden max-w-40 truncate text-cream/70 sm:inline" title={session.user.email}>{session.user.name}</span>}
+          <button onClick={signOut} className="rounded-full px-3 py-1.5 text-cream/80 ring-1 ring-gold/30 transition-colors hover:bg-black/30 hover:text-cream">
+            Sign out
+          </button>
         </nav>
       </header>
 
@@ -178,7 +188,7 @@ export default function Home() {
               <p className="mt-1 text-sm text-cream/70">You host it and deal the first hand. Humans only, up to 9 players.</p>
               <label className="mt-4 block text-sm">
                 Your name
-                <input required maxLength={16} className="field mt-1 w-full text-lg" value={friend.name} onChange={(e) => setFriend({ ...friend, name: e.target.value })} />
+                <input maxLength={16} placeholder={session?.user.name.slice(0, 16)} className="field mt-1 w-full text-lg" value={friend.name} onChange={(e) => setFriend({ ...friend, name: e.target.value })} />
               </label>
               <div className="mt-3 grid grid-cols-2 gap-3">
                 <label className="text-sm">

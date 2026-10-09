@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
+import { authClient } from "@/lib/auth-client";
 import type { Action } from "@/lib/poker";
 import { play } from "@/lib/sound";
 import type { TableView as View } from "@/lib/tables";
@@ -25,6 +26,7 @@ export function FriendTable() {
   const [error, setError] = useState("");
   const [timer, setTimer] = useState<(Timer & { deadline: number }) | null>(null);
   const [name, setName] = useState("");
+  const { data: session } = authClient.useSession();
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showLog, setShowLog] = useState(false);
@@ -92,7 +94,7 @@ export function FriendTable() {
   const onAct = (action: Action | { type: "rebuy" }) => send({ op: "act", action });
   const join = (e: FormEvent) => {
     e.preventDefault();
-    send({ op: "join", name });
+    send({ op: "join", name: name || session?.user.name }); // defaults to your account name
   };
   const copyInvite = async () => {
     const url = `${location.origin}/t/${code}`;
@@ -142,8 +144,8 @@ export function FriendTable() {
           {view.names.length} of 9 seats taken: {view.names.join(", ")}. Blinds {view.bb / 2}/{view.bb}, {view.stack.toLocaleString()} chips each.
         </p>
         <form onSubmit={join} className="mx-auto mt-6 flex max-w-md gap-2">
-          <input autoFocus aria-label="Your name" maxLength={16} placeholder="Your name" className="field w-full text-lg" value={name} onChange={(e) => setName(e.target.value)} />
-          <button disabled={busy || !name.trim()} className="btn-gold disabled:opacity-50">
+          <input autoFocus aria-label="Your name" maxLength={16} placeholder={session?.user.name.slice(0, 16) ?? "Your name"} className="field w-full text-lg" value={name} onChange={(e) => setName(e.target.value)} />
+          <button disabled={busy || !(name.trim() || session)} className="btn-gold disabled:opacity-50">
             JOIN
           </button>
         </form>
