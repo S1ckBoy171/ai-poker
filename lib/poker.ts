@@ -14,9 +14,12 @@ export type Player = {
   allIn: boolean;
   acted: boolean;
   last?: string; // last action, shown on the seat
+  buyIn: number; // total chips brought to the table (start + rebuys + top-offs)
+  rebuys: number;
 };
 
 export type Game = {
+  id: string;
   players: Player[];
   deck: Card[];
   board: Card[];
@@ -29,7 +32,8 @@ export type Game = {
   bb: number;
   hand: number;
   history: string[];
-  winners: { seat: number; amount: number; hand: string }[];
+  winners: { seat: number; amount: number; hand: string; cards: Card[] }[]; // cards = best five at showdown, [] when everyone else folded
+  swept: { street: Street; seat: number; amount: number }[]; // bets last collected into the pot (drives the chip animation)
 };
 
 const RANKS = "23456789TJQKA";
@@ -38,7 +42,8 @@ const CAT = 15 ** 5;
 
 export function newGame(names: string[], stack: number, bb: number): Game {
   return {
-    players: names.map((name) => ({ name, stack, bet: 0, committed: 0, cards: [], folded: true, allIn: false, acted: false })),
+    id: crypto.randomUUID(),
+    players: names.map((name) => ({ name, stack, bet: 0, committed: 0, cards: [], folded: true, allIn: false, acted: false, buyIn: stack, rebuys: 0 })),
     deck: [],
     board: [],
     dealer: names.length - 1,
@@ -51,6 +56,7 @@ export function newGame(names: string[], stack: number, bb: number): Game {
     hand: 0,
     history: [],
     winners: [],
+    swept: [],
   };
 }
 
@@ -95,6 +101,25 @@ export function handValue(cards: Card[]): number {
 
 export const handName = (value: number) => HANDS[Math.floor(value / CAT)];
 
+/** The 5 cards that make the best hand out of 5-7 (tries every 5-card subset: at most 21). */
+export function bestFive(cards: Card[]): Card[] {
+  let best: Card[] = [];
+  let bestValue = -1;
+  const pick = (from: number, chosen: Card[]) => {
+    if (chosen.length === 5) {
+      const v = handValue(chosen);
+      if (v > bestValue) {
+        best = chosen;
+        bestValue = v;
+      }
+      return;
+    }
+    for (let i = from; i < cards.length; i++) pick(i + 1, [...chosen, cards[i]]);
+  };
+  pick(0, []);
+  return best;
+}
+
 const live = (p: Player) => !p.folded;
 const canAct = (p: Player) => !p.folded && !p.allIn;
 
@@ -118,7 +143,7 @@ export function startHand(prev: Game): Game {
   const seated = g.players.filter((p) => p.stack > 0).length;
   if (seated < 2) return g;
   for (const p of g.players) Object.assign(p, { bet: 0, committed: 0, cards: [], folded: p.stack === 0, allIn: false, acted: false, last: undefined });
-  Object.assign(g, { deck: shuffledDeck(), board: [], history: [], winners: [], hand: g.hand + 1, street: "preflop", currentBet: g.bb, minRaise: g.bb });
+  Object.assign(g, { deck: shuffledDeck(), board: [], history: [], winners: [], swept: [], hand: g.hand + 1, street: "preflop", currentBet: g.bb, minRaise: g.bb });
   g.dealer = next(g, g.dealer, live);
   for (const p of g.players) if (live(p)) p.cards = [g.deck.pop()!, g.deck.pop()!];
   const sbSeat = seated === 2 ? g.dealer : next(g, g.dealer, live); // heads-up: dealer posts the small blind
@@ -127,6 +152,19 @@ export function startHand(prev: Game): Game {
     g.history.push(`preflop: ${g.players[seat].name} posts ${blind} blind ${put(g.players[seat], amount)}`);
   g.turn = bbSeat;
   return advance(g);
+}
+
+/** Seat someone new at the end of the table; they sit out until the next hand is dealt. */
+export function addPlayer(prev: Game, name: string, stack: number): Game {
+  const g = structuredClone(prev);
+  g.players.push({ name, stack, bet: 0, committed: 0, cards: [], folded: true, allIn: false, acted: false, buyIn: stack, rebuys: 0 });
+  return g;
+}
+
+/** The table as one seat may see it: no deck, and nobody else's hole cards until they show them at showdown ("" = face down). */
+export function viewFor(g: Game, seat: number): Game {
+  const showdown = g.street === "done" && g.players.filter(live).length > 1;
+  return { ...g, deck: [], players: g.players.map((p, i) => (i === seat || (showdown && live(p)) ? p : { ...p, cards: p.cards.map(() => "") })) };
 }
 
 /** What the player to act may do. */
@@ -178,8 +216,8 @@ function advance(g: Game): Game {
     g.turn = next(g, g.turn, pending);
     return g;
   }
+  sweep(g);
   for (const p of g.players) {
-    p.bet = 0;
     p.acted = false;
     if (canAct(p)) p.last = undefined;
   }
@@ -194,10 +232,17 @@ function advance(g: Game): Game {
   return g;
 }
 
+/** Move this street's bets into the pot, remembering who put in what for the chip animation. */
+function sweep(g: Game) {
+  const bets = g.players.flatMap((p, seat) => (p.bet > 0 ? [{ street: g.street, seat, amount: p.bet }] : []));
+  if (bets.length) g.swept = bets;
+  for (const p of g.players) p.bet = 0;
+}
+
 function finish(g: Game): Game {
+  sweep(g);
   g.street = "done";
   g.turn = -1;
-  for (const p of g.players) p.bet = 0;
   const seats = g.players.map((_, i) => i).filter((i) => live(g.players[i]));
   const won = new Map<number, number>();
   const scores = g.players.map((p) => (live(p) ? handValue([...p.cards, ...g.board]) : -1));
@@ -216,7 +261,10 @@ function finish(g: Game): Game {
     floor = level;
   });
 
-  g.winners = [...won].filter(([, amount]) => amount > 0).map(([seat, amount]) => ({ seat, amount, hand: seats.length > 1 ? handName(scores[seat]) : "" }));
+  const showdown = seats.length > 1;
+  g.winners = [...won]
+    .filter(([, amount]) => amount > 0)
+    .map(([seat, amount]) => ({ seat, amount, hand: showdown ? handName(scores[seat]) : "", cards: showdown ? bestFive([...g.players[seat].cards, ...g.board]) : [] }));
   for (const w of g.winners) {
     g.players[w.seat].stack += w.amount;
     g.history.push(`${g.players[w.seat].name} wins ${w.amount}${w.hand && ` with ${w.hand}`}`);
@@ -273,4 +321,29 @@ export function houseBot(g: Game): Action {
   if (cat >= 2 || (cat === 1 && r < 0.25) || r < 0.04) return { type: "raise", amount: g.currentBet + g.minRaise * (1 + Math.floor(r * 3)) };
   if (g.currentBet - p.bet <= p.stack * (cat ? 0.3 : 0.08)) return { type: "call" };
   return { type: "fold" };
+}
+
+// ---- hand history ----
+
+export type HandRecord = {
+  number: number;
+  board: Card[];
+  history: string[];
+  players: { name: string; cards: Card[]; delta: number; stack: number }[]; // cards only when shown at showdown, or your own
+  winners: { name: string; amount: number; hand: string; cards: Card[] }[];
+};
+
+/** What a finished hand looked like at the table; never the rest of the deck or cards nobody showed. */
+export function handRecord(g: Game, ownSeat: number): HandRecord {
+  const won = new Map(g.winners.map((w) => [w.seat, w.amount]));
+  const showdown = g.players.filter(live).length > 1;
+  return {
+    number: g.hand,
+    board: g.board,
+    history: g.history,
+    players: g.players.flatMap((p, i) =>
+      p.cards.length ? [{ name: p.name, cards: (showdown && live(p)) || i === ownSeat ? p.cards : [], delta: (won.get(i) ?? 0) - p.committed, stack: p.stack }] : [],
+    ),
+    winners: g.winners.map((w) => ({ name: g.players[w.seat].name, amount: w.amount, hand: w.hand, cards: w.cards })),
+  };
 }
