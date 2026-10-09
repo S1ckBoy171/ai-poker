@@ -1,6 +1,6 @@
-// Small presentational pieces shared by the table, the settings modal and the history page (no hooks, server-safe).
+// Small presentational pieces shared by the pages, the table and the settings modal (no hooks, server-safe).
 import type { CSSProperties } from "react";
-import type { Card as CardT } from "@/lib/poker";
+import type { Card as CardCode } from "@/lib/poker";
 
 const PATHS = {
   x: "M18 6 6 18M6 6l12 12",
@@ -20,12 +20,48 @@ const PATHS = {
   link: "M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
 };
 
-export function Icon({ name, className = "h-6 w-6" }: { name: keyof typeof PATHS; className?: string }) {
+export type IconName = keyof typeof PATHS;
+
+export function Icon({ name, className = "h-6 w-6" }: { name: IconName; className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.4}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden
+    >
       <path d={PATHS[name]} />
     </svg>
   );
+}
+
+/** The red ♠ badge of the logo. */
+export function SpadeBadge({ className = "h-8 w-8" }: { className?: string }) {
+  return <span className={`grid ${className} place-items-center rounded-full bg-[#c4202c] text-white shadow ring-2 ring-gold/60`}>♠</span>;
+}
+
+/** "AGENT HOLD'EM", for use next to the badge. */
+export function BrandName() {
+  return (
+    <>
+      AGENT <span className="text-gold">HOLD&apos;EM</span>
+    </>
+  );
+}
+
+/** Green for chips won, red for chips lost, muted when even. */
+export function netColor(amount: number) {
+  if (amount > 0) {
+    return "text-emerald-300";
+  }
+  if (amount < 0) {
+    return "text-red-300";
+  }
+  return "text-cream/60";
 }
 
 export const DIMS = {
@@ -36,23 +72,35 @@ export const DIMS = {
 };
 const SUITS: Record<string, string> = { s: "♠︎", h: "♥︎", d: "♦︎", c: "♣︎" };
 
-/** A card face, or its back when `c` is missing. `win` lifts it as part of the winning five; `dim` fades the rest. */
-export function Card({ c, size, win, dim, delay = 0 }: { c?: CardT; size: keyof typeof DIMS; win?: boolean; dim?: boolean; delay?: number }) {
+type CardProps = {
+  card?: CardCode; // missing (or "") = face down
+  size: keyof typeof DIMS;
+  win?: boolean; // lifted as part of the winning five
+  dim?: boolean; // faded: not part of the winning five
+  delay?: number; // ms before the deal animation starts
+};
+
+/** A card face, or its back when `card` is missing. */
+export function Card({ card, size, win, dim, delay = 0 }: CardProps) {
   const style: CSSProperties = { animationDelay: `${delay}ms` };
-  if (!c) return <div className={`card-back ${DIMS[size]}`} style={style} />;
-  const rank = c[0] === "T" ? "10" : c[0];
+  if (!card) {
+    return <div className={`card-back ${DIMS[size]}`} style={style} />;
+  }
+  const rank = card[0] === "T" ? "10" : card[0];
+  const suit = card[1];
+  const color = suit === "h" || suit === "d" ? "text-[#c8102e]" : "text-zinc-900";
   return (
     <div
       role="img"
-      aria-label={rank + c[1]}
+      aria-label={rank + suit}
       style={style}
-      className={`card ${DIMS[size]} ${win ? "card-win" : ""} ${dim ? "card-dim" : ""} ${c[1] === "h" || c[1] === "d" ? "text-[#c8102e]" : "text-zinc-900"}`}
+      className={`card ${DIMS[size]} ${win ? "card-win" : ""} ${dim ? "card-dim" : ""} ${color}`}
     >
       <span className="absolute left-[10%] top-[7%] flex flex-col items-center">
         {rank}
-        <span>{SUITS[c[1]]}</span>
+        <span>{SUITS[suit]}</span>
       </span>
-      <span className="absolute bottom-[5%] right-[9%] text-[1.7em]">{SUITS[c[1]]}</span>
+      <span className="absolute bottom-[5%] right-[9%] text-[1.7em]">{SUITS[suit]}</span>
     </div>
   );
 }

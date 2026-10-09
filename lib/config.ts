@@ -17,14 +17,23 @@ export type Config = {
 };
 
 export const PROVIDERS: Record<Provider, { label: string; color: string; models: string[] }> = {
-  anthropic: { label: "Anthropic", color: "#d97757", models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"] },
-  openai: { label: "OpenAI", color: "#10a37f", models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-astra"] },
+  anthropic: {
+    label: "Anthropic",
+    color: "#d97757",
+    models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"],
+  },
+  openai: {
+    label: "OpenAI",
+    color: "#10a37f",
+    models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-6-astra"],
+  },
   openrouter: {
     label: "OpenRouter",
     color: "#7c7ff5",
     models: ["google/gemini-3.8-flash", "x-ai/grok-4.7", "deepseek/deepseek-v4.1-flash", "qwen/qwen3.8-max-prime", "anthropic/claude-sonnet-5.5", "openai/gpt-6.1-sol"],
   },
 };
+export const PROVIDER_IDS = Object.keys(PROVIDERS) as Provider[];
 export const EFFORTS: Effort[] = ["default", "low", "medium", "high"];
 
 const agent = (name: string, provider: Provider, model: string): Agent => ({ name, provider, model, effort: "low" });
@@ -53,26 +62,31 @@ export const DEFAULTS: Config = {
 
 /** Fill gaps and clamp anything untrusted (old DB rows, request bodies) into a valid Config. */
 export function normalize(raw: unknown): Config {
-  const c = { ...DEFAULTS, ...(raw && typeof raw === "object" ? raw : {}) } as Config;
-  const bb = Math.max(2, Math.round(Number(c.bb)) || DEFAULTS.bb);
+  const fields = raw && typeof raw === "object" ? raw : {};
+  // Typed as a Config only so each field can be read; every value is still checked below.
+  const merged = { ...DEFAULTS, ...fields } as Config;
+  const bb = Math.max(2, Math.round(Number(merged.bb)) || DEFAULTS.bb);
+  const savedAgents = Array.isArray(merged.agents) ? merged.agents : [];
   return {
-    seats: c.seats === 9 ? 9 : 5,
-    speed: c.speed === "fast" ? "fast" : "normal",
+    seats: merged.seats === 9 ? 9 : 5,
+    speed: merged.speed === "fast" ? "fast" : "normal",
     bb,
-    stack: Math.max(bb, Math.round(Number(c.stack)) || DEFAULTS.stack),
-    rebuy: !!c.rebuy,
-    topOff: !!c.topOff,
-    playing: !!c.playing,
-    reveal: !!c.reveal,
-    agents: DEFAULTS.agents.map((d, i) => {
-      const a = { ...d, ...(Array.isArray(c.agents) ? c.agents[i] : {}) };
-      return {
-        name: String(a.name).slice(0, 24) || d.name,
-        provider: a.provider in PROVIDERS ? a.provider : d.provider,
-        model: String(a.model).trim().slice(0, 120) || d.model,
-        effort: EFFORTS.includes(a.effort) ? a.effort : d.effort,
-      };
-    }),
+    stack: Math.max(bb, Math.round(Number(merged.stack)) || DEFAULTS.stack),
+    rebuy: Boolean(merged.rebuy),
+    topOff: Boolean(merged.topOff),
+    playing: Boolean(merged.playing),
+    reveal: Boolean(merged.reveal),
+    agents: DEFAULTS.agents.map((fallback, seat) => normalizeAgent(savedAgents[seat], fallback)),
+  };
+}
+
+function normalizeAgent(saved: Agent | undefined, fallback: Agent): Agent {
+  const merged = { ...fallback, ...saved };
+  return {
+    name: String(merged.name).slice(0, 24) || fallback.name,
+    provider: merged.provider in PROVIDERS ? merged.provider : fallback.provider,
+    model: String(merged.model).trim().slice(0, 120) || fallback.model,
+    effort: EFFORTS.includes(merged.effort) ? merged.effort : fallback.effort,
   };
 }
 

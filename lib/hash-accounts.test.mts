@@ -1,7 +1,7 @@
 // Run: npm test
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { HASH, HASH_DOMAIN, ID_HEADER, ID_HEADER_VALUE, NEW_HASH_EMAIL, cleanId, hashOf } from "./hash-accounts.ts";
+import { HASH, HASH_DOMAIN, ID_HEADER, idHeaderValue, NEW_HASH_EMAIL, cleanId, hashOf } from "./hash-accounts.ts";
 
 test("IDs are trimmed, inner spaces collapsed, and cut to 32 characters", () => {
   assert.equal(cleanId("  Sø  🃏\t king "), "Sø 🃏 king");
@@ -13,8 +13,8 @@ test("IDs are trimmed, inner spaces collapsed, and cut to 32 characters", () => 
 
 test("the ID travels in its header as the cleaned ID, URI-encoded", () => {
   assert.equal(ID_HEADER, "x-hash-id");
-  assert.equal(ID_HEADER_VALUE("  Sø  🃏 "), encodeURIComponent("Sø 🃏"));
-  assert.equal(decodeURIComponent(ID_HEADER_VALUE("Sø 🃏")), "Sø 🃏");
+  assert.equal(idHeaderValue("  Sø  🃏 "), encodeURIComponent("Sø 🃏"));
+  assert.equal(decodeURIComponent(idHeaderValue("Sø 🃏")), "Sø 🃏");
 });
 
 test("a hash account's email is its hash at the reserved domain", () => {

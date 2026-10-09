@@ -16,25 +16,29 @@ export const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
  * A token works once: remount (change the key) after each attempt to get a new one. Renders nothing without a site key.
  */
 export function Turnstile({ onToken }: { onToken: (token: string) => void }) {
-  const box = useRef<HTMLDivElement>(null);
+  const container = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState(false);
-  const report = useEffectEvent(onToken);
+  const reportToken = useEffectEvent(onToken);
   useEffect(() => {
-    if (!TURNSTILE_SITE_KEY || !loaded || !box.current || !window.turnstile) return;
-    const id = window.turnstile.render(box.current, {
+    if (!TURNSTILE_SITE_KEY || !loaded || !container.current || !window.turnstile) {
+      return;
+    }
+    const widgetId = window.turnstile.render(container.current, {
       sitekey: TURNSTILE_SITE_KEY,
       theme: "dark",
-      callback: (token: string) => report(token),
-      "expired-callback": () => report(""),
-      "error-callback": () => report(""),
+      callback: (token: string) => reportToken(token),
+      "expired-callback": () => reportToken(""),
+      "error-callback": () => reportToken(""),
     });
-    return () => window.turnstile?.remove(id);
+    return () => window.turnstile?.remove(widgetId);
   }, [loaded]);
-  if (!TURNSTILE_SITE_KEY) return null;
+  if (!TURNSTILE_SITE_KEY) {
+    return null;
+  }
   return (
     <>
       <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" onReady={() => setLoaded(true)} />
-      <div ref={box} className="flex min-h-[65px] justify-center" />
+      <div ref={container} className="flex min-h-[65px] justify-center" />
     </>
   );
 }

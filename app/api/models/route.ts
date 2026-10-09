@@ -13,51 +13,81 @@ const OPENAI_NOT_CHAT = /(audio|realtime|tts|transcribe|image|embedding|moderati
 /** Body: { provider, key? } - checks the key with the provider and lists the models it can use. No key = the saved one. */
 export async function POST(req: Request) {
   const userId = await ownPageOnly(req);
-  if (userId instanceof Response) return userId;
-  const { provider, key: typed } = (await req.json().catch(() => ({}))) as { provider?: unknown; key?: unknown };
-  if (typeof provider !== "string" || !Object.hasOwn(PROVIDERS, provider)) return Response.json({ error: "bad request" }, { status: 400 });
-  const p = provider as Provider;
-  const key = (typeof typed === "string" && typed.trim().slice(0, 400)) || (await getKey(userId, p));
-  if (!key) return Response.json({ error: `Enter your ${PROVIDERS[p].label} API key.` }, { status: 400 });
+  if (userId instanceof Response) {
+    return userId;
+  }
+
+  const { provider, key: typedKey } = (await req.json().catch(() => ({}))) as { provider?: unknown; key?: unknown };
+  if (typeof provider !== "string" || !Object.hasOwn(PROVIDERS, provider)) {
+    return Response.json({ error: "bad request" }, { status: 400 });
+  }
+  const chosen = provider as Provider;
+  const { label } = PROVIDERS[chosen];
+  const key = (typeof typedKey === "string" && typedKey.trim().slice(0, 400)) || (await getKey(userId, chosen));
+  if (!key) {
+    return Response.json({ error: `Enter your ${label} API key.` }, { status: 400 });
+  }
+
   try {
-    const models = p === "anthropic" ? await anthropic(key, req.signal) : p === "openai" ? await openai(key, req.signal) : await openrouter(key, req.signal);
+    const models = await listModels(chosen, key, req.signal);
     return Response.json({ models: models.slice(0, MAX), total: models.length });
   } catch (e) {
     const status = e instanceof Anthropic.APIError ? e.status : (e as { status?: number }).status;
     const rejected = status === 401 || status === 403;
-    return Response.json({ error: rejected ? `${PROVIDERS[p].label} rejected this API key.` : (e as Error).message }, { status: rejected ? 401 : 502 });
+    if (rejected) {
+      return Response.json({ error: `${label} rejected this API key.` }, { status: 401 });
+    }
+    return Response.json({ error: (e as Error).message }, { status: 502 });
   }
 }
 
-async function anthropic(key: string, signal: AbortSignal): Promise<ModelOption[]> {
-  const out: ModelOption[] = [];
-  for await (const m of new Anthropic({ apiKey: key }).models.list({ lifecycle: ["active"], limit: 100 }, { signal })) {
-    out.push({ id: m.id, name: m.display_name });
-    if (out.length >= MAX) break;
+function listModels(provider: Provider, key: string, signal: AbortSignal): Promise<ModelOption[]> {
+  if (provider === "anthropic") {
+    return anthropicModels(key, signal);
   }
-  return out; // the API lists newest first
+  if (provider === "openai") {
+    return openAIModels(key, signal);
+  }
+  return openRouterModels(key, signal);
 }
 
-async function openai(key: string, signal: AbortSignal): Promise<ModelOption[]> {
-  const { data } = await get("https://api.openai.com/v1/models", key, signal);
-  return (data as { id: string; created: number }[])
-    .filter((m) => OPENAI_CHAT.test(m.id) && !OPENAI_NOT_CHAT.test(m.id))
+async function anthropicModels(key: string, signal: AbortSignal): Promise<ModelOption[]> {
+  const models: ModelOption[] = [];
+  for await (const model of new Anthropic({ apiKey: key }).models.list({ lifecycle: ["active"], limit: 100 }, { signal })) {
+    models.push({ id: model.id, name: model.display_name });
+    if (models.length >= MAX) {
+      break;
+    }
+  }
+  return models; // the API lists newest first
+}
+
+async function openAIModels(key: string, signal: AbortSignal): Promise<ModelOption[]> {
+  const { data } = await getJson<{ data: { id: string; created: number }[] }>("https://api.openai.com/v1/models", key, signal);
+  return data
+    .filter((model) => OPENAI_CHAT.test(model.id) && !OPENAI_NOT_CHAT.test(model.id))
     .sort((a, b) => b.created - a.created)
-    .map((m) => ({ id: m.id, name: m.id }));
+    .map((model) => ({ id: model.id, name: model.id }));
 }
 
-async function openrouter(key: string, signal: AbortSignal): Promise<ModelOption[]> {
-  await get("https://openrouter.ai/api/v1/key", key, signal); // the model list is public, so check the key on its own
-  const { data } = await get("https://openrouter.ai/api/v1/models", key, signal);
-  return (data as { id: string; name: string; created: number; architecture?: { output_modalities?: string[] } }[])
-    .filter((m) => m.architecture?.output_modalities?.includes("text") ?? true)
+type OpenRouterModel = { id: string; name: string; created: number; architecture?: { output_modalities?: string[] } };
+
+async function openRouterModels(key: string, signal: AbortSignal): Promise<ModelOption[]> {
+  await getJson("https://openrouter.ai/api/v1/key", key, signal); // the model list is public, so check the key on its own
+  const { data } = await getJson<{ data: OpenRouterModel[] }>("https://openrouter.ai/api/v1/models", key, signal);
+  return data
+    .filter((model) => model.architecture?.output_modalities?.includes("text") ?? true)
     .sort((a, b) => b.created - a.created)
-    .map((m) => ({ id: m.id, name: m.name }));
+    .map((model) => ({ id: model.id, name: model.name }));
 }
 
-async function get(url: string, key: string, signal: AbortSignal) {
-  const res = await fetch(url, { signal, headers: { Authorization: `Bearer ${key}` } });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(json.error?.message ?? `HTTP ${res.status}`), { status: res.status });
-  return json;
+/** GET JSON with a bearer key; a failed status throws the provider's message, carrying the HTTP status. */
+async function getJson<T>(url: string, key: string, signal: AbortSignal): Promise<T> {
+  const response = await fetch(url, { signal, headers: { Authorization: `Bearer ${key}` } });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = json.error?.message ?? `HTTP ${response.status}`;
+    throw Object.assign(new Error(message), { status: response.status });
+  }
+  return json as T;
 }

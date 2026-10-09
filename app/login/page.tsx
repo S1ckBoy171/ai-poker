@@ -4,22 +4,33 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { authClient } from "@/lib/auth-client";
+import { HASH, HASH_DOMAIN, ID_HEADER, NEW_HASH_EMAIL, WRONG_HASH_LOGIN, hashOf, idHeaderValue } from "@/lib/hash-accounts";
 import { TURNSTILE_SITE_KEY, Turnstile } from "../turnstile";
-import { HASH, HASH_DOMAIN, ID_HEADER, ID_HEADER_VALUE, NEW_HASH_EMAIL, WRONG_HASH_LOGIN, hashOf } from "@/lib/hash-accounts";
+import { BrandName, SpadeBadge } from "../ui";
 
 type Method = "hash" | "email";
 type Mode = "signin" | "create";
 type Creds = { id: string; password: string; hash: string };
 
+const METHODS: [Method, string][] = [
+  ["hash", "Hash ID"],
+  ["email", "Email"],
+];
+const MODES: [Mode, string][] = [
+  ["signin", "Sign in"],
+  ["create", "Create account"],
+];
+const MIN_EMAIL_PASSWORD_LENGTH = 8;
+
 /** Where to go after signing in: the page that sent you here, only if it resolves to this site ("/\evil.com" doesn't). */
-const nextPath = () => {
+function nextPath() {
   try {
     const url = new URL(new URLSearchParams(location.search).get("next") ?? "/", location.origin);
     return url.origin === location.origin ? url.pathname + url.search + url.hash : "/";
   } catch {
     return "/";
   }
-};
+}
 
 /** The account file a new hash account downloads; the Hash ID tab can read it back. */
 function downloadCredentials({ id, password, hash }: Creds) {
@@ -35,9 +46,51 @@ function downloadCredentials({ id, password, hash }: Creds) {
     "",
   ].join("\n");
   const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-  const a = Object.assign(document.createElement("a"), { href: url, download: `agent-holdem-${id.replace(/[^\w-]+/g, "_") || "account"}-${hash.slice(0, 8)}.txt` });
-  a.click();
+  const safeId = id.replace(/[^\w-]+/g, "_") || "account";
+  const link = Object.assign(document.createElement("a"), { href: url, download: `agent-holdem-${safeId}-${hash.slice(0, 8)}.txt` });
+  link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Sends the CAPTCHA token along with a sign-up. */
+const withCaptcha = (token: string) => ({ fetchOptions: { headers: { "x-captcha-response": token } } });
+
+/** The server makes the hash; the response carries it back as the account's email. */
+async function createHashAccount(id: string, password: string, captchaToken: string): Promise<Creds> {
+  const { data, error } = await authClient.signUp.email({ email: NEW_HASH_EMAIL, password, name: id, ...withCaptcha(captchaToken) });
+  if (error) {
+    throw new Error(error.message);
+  }
+  return { id: data.user.name, password, hash: hashOf(data.user.email) ?? "" };
+}
+
+async function signInWithHash(id: string, password: string, typedHash: string) {
+  const hash = typedHash.trim().toLowerCase();
+  if (!HASH.test(hash)) {
+    throw new Error("A hash is 32 letters and digits, as in your account file.");
+  }
+  const { error } = await authClient.signIn.email({
+    email: hash + HASH_DOMAIN,
+    password,
+    fetchOptions: { headers: { [ID_HEADER]: idHeaderValue(id) } },
+  });
+  if (error) {
+    throw new Error(error.status === 429 ? error.message : WRONG_HASH_LOGIN); // never say which of the three was wrong
+  }
+}
+
+async function createEmailAccount(name: string, email: string, password: string, captchaToken: string) {
+  const { error } = await authClient.signUp.email({ email, password, name, ...withCaptcha(captchaToken) });
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+async function signInWithEmail(email: string, password: string) {
+  const { error } = await authClient.signIn.email({ email, password });
+  if (error) {
+    throw new Error(error.message);
+  }
 }
 
 export default function LoginPage() {
@@ -51,41 +104,30 @@ export default function LoginPage() {
   const [created, setCreated] = useState<Creds | null>(null);
   const [captcha, setCaptcha] = useState(""); // Turnstile token for creating an account
   const [captchaRound, setCaptchaRound] = useState(0); // bump to get a fresh widget (tokens work once)
-  const set = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
+  const update = (patch: Partial<typeof form>) => setForm({ ...form, ...patch });
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
     setBusy(true);
-    const captchaHeaders = { fetchOptions: { headers: { "x-captcha-response": captcha } } };
+    const captchaToken = captcha;
     if (mode === "create") {
       setCaptcha("");
-      setCaptchaRound((n) => n + 1); // this token is spent, whatever happens next
+      setCaptchaRound((round) => round + 1); // this token is spent, whatever happens next
     }
     try {
       if (method === "hash" && mode === "create") {
-        // The server makes the hash; the response carries it back as the account's email.
-        const { data, error } = await authClient.signUp.email({ email: NEW_HASH_EMAIL, password: form.password, name: form.id, ...captchaHeaders });
-        if (error) throw new Error(error.message);
-        const creds = { id: data.user.name, password: form.password, hash: hashOf(data.user.email) ?? "" };
+        const creds = await createHashAccount(form.id, form.password, captchaToken);
         downloadCredentials(creds);
-        return setCreated(creds);
+        setCreated(creds);
+        return;
       }
       if (method === "hash") {
-        const hash = form.hash.trim().toLowerCase();
-        if (!HASH.test(hash)) throw new Error("A hash is 32 letters and digits, as in your account file.");
-        const { error } = await authClient.signIn.email({
-          email: hash + HASH_DOMAIN,
-          password: form.password,
-          fetchOptions: { headers: { [ID_HEADER]: ID_HEADER_VALUE(form.id) } },
-        });
-        if (error) throw new Error(error.status === 429 ? error.message : WRONG_HASH_LOGIN); // never say which of the three was wrong
+        await signInWithHash(form.id, form.password, form.hash);
       } else if (mode === "create") {
-        const { error } = await authClient.signUp.email({ email: form.email, password: form.password, name: form.name, ...captchaHeaders });
-        if (error) throw new Error(error.message);
+        await createEmailAccount(form.name, form.email, form.password, captchaToken);
       } else {
-        const { error } = await authClient.signIn.email({ email: form.email, password: form.password });
-        if (error) throw new Error(error.message);
+        await signInWithEmail(form.email, form.password);
       }
       router.push(nextPath());
     } catch (err) {
@@ -98,14 +140,26 @@ export default function LoginPage() {
   /** Fill the hash sign-in form from a downloaded account file. */
   const loadFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const text = (await e.target.files?.[0]?.text()) ?? "";
-    const line = (label: string) => text.match(new RegExp(`^${label}: (.*)$`, "m"))?.[1] ?? "";
-    const hash = line("Hash").trim();
-    if (!HASH.test(hash)) return setError("That file doesn't look like an Agent Hold'em account file.");
+    const field = (label: string) => text.match(new RegExp(`^${label}: (.*)$`, "m"))?.[1] ?? "";
+    const hash = field("Hash").trim();
+    if (!HASH.test(hash)) {
+      setError("That file doesn't look like an Agent Hold'em account file.");
+      return;
+    }
     setError("");
-    set({ id: line("ID"), password: line("Password"), hash });
+    update({ id: field("ID"), password: field("Password"), hash });
   };
 
-  if (created)
+  const pickMethod = (picked: Method) => {
+    setMethod(picked);
+    setError("");
+  };
+  const pickMode = (picked: Mode) => {
+    setMode(picked);
+    setError("");
+  };
+
+  if (created) {
     return (
       <Shell>
         <h1 className="font-display text-4xl font-bold tracking-wide text-white">ACCOUNT CREATED</h1>
@@ -128,28 +182,28 @@ export default function LoginPage() {
         </div>
       </Shell>
     );
+  }
 
-  const field = (label: string, input: ReactNode) => (
-    <label className="block text-left text-sm">
-      {label}
-      <div className="mt-1">{input}</div>
-    </label>
-  );
-  const password = (
+  const creating = mode === "create";
+  let submitLabel = creating ? "CREATE ACCOUNT" : "SIGN IN";
+  if (busy) {
+    submitLabel = "ONE MOMENT…";
+  }
+  const passwordInput = (
     <input
       type="password"
       required
-      minLength={method === "email" && mode === "create" ? 8 : 1}
-      autoComplete={mode === "create" ? "new-password" : "current-password"}
+      minLength={method === "email" && creating ? MIN_EMAIL_PASSWORD_LENGTH : 1}
+      autoComplete={creating ? "new-password" : "current-password"}
       className="field w-full text-lg"
       value={form.password}
-      onChange={(e) => set({ password: e.target.value })}
+      onChange={(e) => update({ password: e.target.value })}
     />
   );
 
   return (
     <Shell>
-      <h1 className="font-display text-4xl font-bold tracking-wide text-white sm:text-5xl">{mode === "create" ? "CREATE ACCOUNT" : "SIGN IN"}</h1>
+      <h1 className="font-display text-4xl font-bold tracking-wide text-white sm:text-5xl">{creating ? "CREATE ACCOUNT" : "SIGN IN"}</h1>
       {session && (
         <p className="mt-2 text-sm text-cream/75">
           Signed in as <b>{session.user.name}</b>.{" "}
@@ -159,57 +213,69 @@ export default function LoginPage() {
         </p>
       )}
       <div role="tablist" aria-label="Account type" className="seg mx-auto mt-6 w-fit">
-        {(
-          [
-            ["hash", "Hash ID"],
-            ["email", "Email"],
-          ] as const
-        ).map(([m, label]) => (
-          <button key={m} role="tab" aria-selected={method === m} onClick={() => (setMethod(m), setError(""))}>
+        {METHODS.map(([id, label]) => (
+          <button key={id} role="tab" aria-selected={method === id} onClick={() => pickMethod(id)}>
             {label}
           </button>
         ))}
       </div>
       <div className="mx-auto mt-3 flex w-fit gap-1 rounded-full bg-black/30 p-1 text-sm">
-        {(
-          [
-            ["signin", "Sign in"],
-            ["create", "Create account"],
-          ] as const
-        ).map(([m, label]) => (
-          <button key={m} aria-pressed={mode === m} onClick={() => (setMode(m), setError(""))} className={`rounded-full px-4 py-1.5 transition-colors ${mode === m ? "bg-[#f0d9b5] text-wine" : "text-cream/80 hover:text-cream"}`}>
+        {MODES.map(([id, label]) => (
+          <button
+            key={id}
+            aria-pressed={mode === id}
+            onClick={() => pickMode(id)}
+            className={`rounded-full px-4 py-1.5 transition-colors ${mode === id ? "bg-[#f0d9b5] text-wine" : "text-cream/80 hover:text-cream"}`}
+          >
             {label}
           </button>
         ))}
       </div>
 
       <form onSubmit={submit} className="mx-auto mt-6 max-w-md space-y-4">
-        {method === "hash" ? (
+        {method === "hash" && (
           <>
             <p className="text-sm text-cream/70">
-              {mode === "create"
+              {creating
                 ? "Pick any ID and password, even ones other people use. We make a unique hash for your account and download a file with all three."
                 : "Enter the ID, password and hash from your account file, or load the file."}
             </p>
-            {field("ID", <input required maxLength={32} autoComplete="username" className="field w-full text-lg" value={form.id} onChange={(e) => set({ id: e.target.value })} />)}
-            {field("Password", password)}
-            {mode === "signin" &&
-              field(
-                "Hash",
-                <input required spellCheck={false} autoComplete="off" placeholder="32 letters and digits" className="field w-full font-mono" value={form.hash} onChange={(e) => set({ hash: e.target.value })} />,
-              )}
-            {mode === "signin" && (
+            <Field label="ID">
+              <input required maxLength={32} autoComplete="username" className="field w-full text-lg" value={form.id} onChange={(e) => update({ id: e.target.value })} />
+            </Field>
+            <Field label="Password">{passwordInput}</Field>
+            {!creating && (
+              <Field label="Hash">
+                <input
+                  required
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="32 letters and digits"
+                  className="field w-full font-mono"
+                  value={form.hash}
+                  onChange={(e) => update({ hash: e.target.value })}
+                />
+              </Field>
+            )}
+            {!creating && (
               <label className="block cursor-pointer text-sm text-cream/75 underline hover:text-cream">
                 Load my account file (.txt)
                 <input type="file" accept=".txt,text/plain" className="sr-only" onChange={loadFile} />
               </label>
             )}
           </>
-        ) : (
+        )}
+        {method === "email" && (
           <>
-            {mode === "create" && field("Name", <input required maxLength={32} autoComplete="name" className="field w-full text-lg" value={form.name} onChange={(e) => set({ name: e.target.value })} />)}
-            {field("Email", <input type="email" required autoComplete="email" className="field w-full text-lg" value={form.email} onChange={(e) => set({ email: e.target.value })} />)}
-            {field(mode === "create" ? "Password (8 or more characters)" : "Password", password)}
+            {creating && (
+              <Field label="Name">
+                <input required maxLength={32} autoComplete="name" className="field w-full text-lg" value={form.name} onChange={(e) => update({ name: e.target.value })} />
+              </Field>
+            )}
+            <Field label="Email">
+              <input type="email" required autoComplete="email" className="field w-full text-lg" value={form.email} onChange={(e) => update({ email: e.target.value })} />
+            </Field>
+            <Field label={creating ? "Password (8 or more characters)" : "Password"}>{passwordInput}</Field>
           </>
         )}
         {error && (
@@ -217,12 +283,21 @@ export default function LoginPage() {
             {error}
           </p>
         )}
-        {mode === "create" && <Turnstile key={captchaRound} onToken={setCaptcha} />}
-        <button disabled={busy || (mode === "create" && !!TURNSTILE_SITE_KEY && !captcha)} className="btn-gold w-full disabled:opacity-60">
-          {busy ? "ONE MOMENT…" : mode === "create" ? "CREATE ACCOUNT" : "SIGN IN"}
+        {creating && <Turnstile key={captchaRound} onToken={setCaptcha} />}
+        <button disabled={busy || (creating && !!TURNSTILE_SITE_KEY && !captcha)} className="btn-gold w-full disabled:opacity-60">
+          {submitLabel}
         </button>
       </form>
     </Shell>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block text-left text-sm">
+      {label}
+      <div className="mt-1">{children}</div>
+    </label>
   );
 }
 
@@ -231,8 +306,8 @@ function Shell({ children }: { children: ReactNode }) {
     <main className="grid min-h-dvh place-items-center px-4 py-10">
       <div className="w-full max-w-xl text-center">
         <div className="mb-6 flex items-center justify-center gap-2 font-display text-2xl tracking-wide">
-          <span className="grid h-9 w-9 place-items-center rounded-full bg-[#c4202c] text-white shadow ring-2 ring-gold/60">♠</span>
-          AGENT <span className="text-gold">HOLD&apos;EM</span>
+          <SpadeBadge className="h-9 w-9" />
+          <BrandName />
         </div>
         <div className="anim-modal panel p-6 sm:p-10">{children}</div>
       </div>
