@@ -21,9 +21,16 @@ test("table options keep valid values and fix the rest", () => {
   assert.equal(config.playing, false);
   assert.equal(config.reveal, true);
 
-  const odd = normalize({ seats: 7, speed: "warp" });
-  assert.equal(odd.seats, 5);
-  assert.equal(odd.speed, "normal");
+  assert.equal(normalize({ speed: "warp" }).speed, "normal");
+});
+
+test("a table seats 2 to 9 players: you plus 1 to 8 bots", () => {
+  assert.equal(normalize({ seats: 7 }).seats, 7);
+  assert.equal(normalize({ seats: "4" }).seats, 4);
+  assert.equal(normalize({ seats: 12 }).seats, 9);
+  assert.equal(normalize({ seats: 1 }).seats, 2);
+  assert.equal(normalize({ seats: 0 }).seats, DEFAULTS.seats);
+  assert.equal(normalize({ seats: "many" }).seats, DEFAULTS.seats);
 });
 
 test("the big blind is a whole number of at least 2, and stacks hold at least one big blind", () => {

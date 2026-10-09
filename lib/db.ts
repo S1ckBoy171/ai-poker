@@ -21,6 +21,12 @@ export async function getKey(userId: string, id: string): Promise<string | undef
   return row?.key;
 }
 
+/** A key typed into the request (trimmed, at most 400 characters), or else this account's saved key for the provider. */
+export async function typedOrSavedKey(userId: string, provider: string, typed: unknown): Promise<string | undefined> {
+  const typedKey = typeof typed === "string" ? typed.trim().slice(0, 400) : "";
+  return typedKey || (await getKey(userId, provider));
+}
+
 /** The seat's own key if it has one, else the provider key - both from this account only. */
 export async function getAgentKey(userId: string, seat: number, provider: string): Promise<string | undefined> {
   const seatKeyId = `seat:${seat}`;

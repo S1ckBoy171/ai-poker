@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { EFFORTS, PROVIDERS, PROVIDER_IDS, type Agent, type Config, type Provider } from "@/lib/config";
+import { EFFORTS, MAX_SEATS, MIN_SEATS, PROVIDERS, PROVIDER_IDS, type Agent, type Config, type Provider } from "@/lib/config";
 import { Icon } from "./ui";
 
 export type KeyEdits = Record<string, string | null>; // id -> new key, or null to delete
+
+const SEAT_COUNTS = Array.from({ length: MAX_SEATS - MIN_SEATS + 1 }, (_, i) => MIN_SEATS + i);
 
 type SettingsModalProps = {
   cfg: Config;
@@ -106,14 +108,18 @@ export function SettingsModal({ cfg, hints, onSave, onClose }: SettingsModalProp
           <div className="mt-8 grid gap-8 md:grid-cols-2">
             <div className="space-y-5">
               <Row icon={<Icon name="user" className="h-12 w-12" />} label="Players">
-                <Seg
+                <select
+                  aria-label="Players"
+                  className="field w-full text-lg"
                   value={draft.seats}
-                  options={[
-                    [5, "5"],
-                    [9, "9"],
-                  ]}
-                  onChange={(seats) => update({ seats })}
-                />
+                  onChange={(e) => update({ seats: Number(e.target.value) })}
+                >
+                  {SEAT_COUNTS.map((count) => (
+                    <option key={count} value={count}>
+                      {count} players
+                    </option>
+                  ))}
+                </select>
               </Row>
               <Row icon={<Icon name="timer" className="h-12 w-12" />} label="Speed">
                 <Seg

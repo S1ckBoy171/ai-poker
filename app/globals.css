@@ -194,6 +194,13 @@ body {
   }
 }
 
+/* many short choices in one row, like the number of bots */
+.seg.seg-compact > button {
+  min-width: 0;
+  padding: 0.4rem 0.5rem;
+  font-size: 1.1rem;
+}
+
 /* hover/focus tooltip: wrap the trigger and its [role=tooltip] in .tooltip-wrap */
 .tooltip-wrap {
   position: relative;

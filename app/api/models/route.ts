@@ -1,14 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { PROVIDERS, type Provider } from "@/lib/config";
-import { getKey } from "@/lib/db";
+import { isKeyRejected } from "@/lib/agents";
+import { PROVIDERS, isProvider, type ModelOption, type Provider } from "@/lib/config";
+import { typedOrSavedKey } from "@/lib/db";
 import { ownPageOnly } from "@/lib/guard";
-
-export type ModelOption = { id: string; name: string };
 
 const MAX = 100; // newest first; OpenRouter alone lists several hundred
 // OpenAI's list also has embedding, audio, image and moderation models that can't play a hand.
 const OPENAI_CHAT = /^(gpt-|o\d|chatgpt-)/;
 const OPENAI_NOT_CHAT = /(audio|realtime|tts|transcribe|image|embedding|moderation|search|whisper|dall-e|instruct)/;
+// OpenAI's list doesn't say which models reason, so `effort` there is a guess: these families do (their "-chat" variants don't).
+const OPENAI_REASONING = /^(o\d|gpt-5|gpt-6)/;
 
 /** Body: { provider, key? } - checks the key with the provider and lists the models it can use. No key = the saved one. */
 export async function POST(req: Request) {
@@ -18,23 +19,20 @@ export async function POST(req: Request) {
   }
 
   const { provider, key: typedKey } = (await req.json().catch(() => ({}))) as { provider?: unknown; key?: unknown };
-  if (typeof provider !== "string" || !Object.hasOwn(PROVIDERS, provider)) {
+  if (!isProvider(provider)) {
     return Response.json({ error: "bad request" }, { status: 400 });
   }
-  const chosen = provider as Provider;
-  const { label } = PROVIDERS[chosen];
-  const key = (typeof typedKey === "string" && typedKey.trim().slice(0, 400)) || (await getKey(userId, chosen));
+  const { label } = PROVIDERS[provider];
+  const key = await typedOrSavedKey(userId, provider, typedKey);
   if (!key) {
     return Response.json({ error: `Enter your ${label} API key.` }, { status: 400 });
   }
 
   try {
-    const models = await listModels(chosen, key, req.signal);
+    const models = await listModels(provider, key, req.signal);
     return Response.json({ models: models.slice(0, MAX), total: models.length });
   } catch (e) {
-    const status = e instanceof Anthropic.APIError ? e.status : (e as { status?: number }).status;
-    const rejected = status === 401 || status === 403;
-    if (rejected) {
+    if (isKeyRejected(e)) {
       return Response.json({ error: `${label} rejected this API key.` }, { status: 401 });
     }
     return Response.json({ error: (e as Error).message }, { status: 502 });
@@ -54,7 +52,10 @@ function listModels(provider: Provider, key: string, signal: AbortSignal): Promi
 async function anthropicModels(key: string, signal: AbortSignal): Promise<ModelOption[]> {
   const models: ModelOption[] = [];
   for await (const model of new Anthropic({ apiKey: key }).models.list({ lifecycle: ["active"], limit: 100 }, { signal })) {
-    models.push({ id: model.id, name: model.display_name });
+    // effort only goes out with adaptive thinking (see lib/agents.ts), so the model needs both
+    const capabilities = model.capabilities;
+    const effort = capabilities ? capabilities.effort.supported && capabilities.thinking.types.adaptive.supported : undefined;
+    models.push({ id: model.id, name: model.display_name, effort });
     if (models.length >= MAX) {
       break;
     }
@@ -67,10 +68,16 @@ async function openAIModels(key: string, signal: AbortSignal): Promise<ModelOpti
   return data
     .filter((model) => OPENAI_CHAT.test(model.id) && !OPENAI_NOT_CHAT.test(model.id))
     .sort((a, b) => b.created - a.created)
-    .map((model) => ({ id: model.id, name: model.id }));
+    .map((model) => ({ id: model.id, name: model.id, effort: OPENAI_REASONING.test(model.id) && !model.id.includes("-chat") }));
 }
 
-type OpenRouterModel = { id: string; name: string; created: number; architecture?: { output_modalities?: string[] } };
+type OpenRouterModel = {
+  id: string;
+  name: string;
+  created: number;
+  architecture?: { output_modalities?: string[] };
+  supported_parameters?: string[];
+};
 
 async function openRouterModels(key: string, signal: AbortSignal): Promise<ModelOption[]> {
   await getJson("https://openrouter.ai/api/v1/key", key, signal); // the model list is public, so check the key on its own
@@ -78,7 +85,7 @@ async function openRouterModels(key: string, signal: AbortSignal): Promise<Model
   return data
     .filter((model) => model.architecture?.output_modalities?.includes("text") ?? true)
     .sort((a, b) => b.created - a.created)
-    .map((model) => ({ id: model.id, name: model.name }));
+    .map((model) => ({ id: model.id, name: model.name, effort: model.supported_parameters?.includes("reasoning") }));
 }
 
 /** GET JSON with a bearer key; a failed status throws the provider's message, carrying the HTTP status. */

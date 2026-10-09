@@ -5,7 +5,7 @@ export type Effort = "default" | "low" | "medium" | "high";
 export type Agent = { name: string; provider: Provider; model: string; effort: Effort };
 
 export type Config = {
-  seats: 5 | 9;
+  seats: number; // players at the table, 2-9: you (when playing) plus 1-8 bots
   speed: "fast" | "normal";
   stack: number; // every player starts with this many chips
   bb: number;
@@ -34,6 +34,17 @@ export const PROVIDERS: Record<Provider, { label: string; color: string; models:
   },
 };
 export const PROVIDER_IDS = Object.keys(PROVIDERS) as Provider[];
+
+export const isProvider = (value: unknown): value is Provider => typeof value === "string" && Object.hasOwn(PROVIDERS, value);
+
+/** A model an API key can use, as /api/models lists it. */
+export type ModelOption = {
+  id: string;
+  name: string;
+  effort?: boolean; // whether its reasoning effort can be set; missing when the provider doesn't say
+};
+export const MIN_SEATS = 2;
+export const MAX_SEATS = 9;
 export const EFFORTS: Effort[] = ["default", "low", "medium", "high"];
 
 const agent = (name: string, provider: Provider, model: string): Agent => ({ name, provider, model, effort: "low" });
@@ -68,7 +79,7 @@ export function normalize(raw: unknown): Config {
   const bb = Math.max(2, Math.round(Number(merged.bb)) || DEFAULTS.bb);
   const savedAgents = Array.isArray(merged.agents) ? merged.agents : [];
   return {
-    seats: merged.seats === 9 ? 9 : 5,
+    seats: Math.min(MAX_SEATS, Math.max(MIN_SEATS, Math.round(Number(merged.seats)) || DEFAULTS.seats)),
     speed: merged.speed === "fast" ? "fast" : "normal",
     bb,
     stack: Math.max(bb, Math.round(Number(merged.stack)) || DEFAULTS.stack),

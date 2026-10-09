@@ -123,6 +123,7 @@ describe("signed-out visitors", () => {
       ["PUT", "/api/settings"],
       ["POST", "/api/agent"],
       ["POST", "/api/models"],
+      ["POST", "/api/models/check"],
       ["POST", "/api/hands"],
       ["POST", "/api/tables"],
       ["GET", "/api/tables/0123abcd"],
@@ -250,9 +251,9 @@ describe("settings and API keys", () => {
   });
 
   test("settings are cleaned before they are saved", async () => {
-    const reply = await putSettings(ann, { config: { seats: 7, bb: 1, stack: 1, speed: "warp", agents: [{ provider: "bogus" }] } });
+    const reply = await putSettings(ann, { config: { seats: 12, bb: 1, stack: 1, speed: "warp", agents: [{ provider: "bogus" }] } });
     assert.equal(reply.status, 200);
-    assert.equal(reply.body.config.seats, 5);
+    assert.equal(reply.body.config.seats, 9, "at most 9 players");
     assert.equal(reply.body.config.bb, 2);
     assert.equal(reply.body.config.stack, 2);
     assert.equal(reply.body.config.speed, "normal");
@@ -332,6 +333,24 @@ describe("AI agent and model routes (local checks only)", () => {
       assert.equal(reply.status, 400);
       assert.equal(reply.body.error, "Enter your OpenAI API key.");
     }
+  });
+
+  test("checking one model needs a known provider, a model, a valid effort and a key", async () => {
+    const badRequests = [
+      { provider: "google", model: "x" },
+      { provider: "openai" },
+      { provider: "openai", model: "   " },
+      { provider: "openai", model: "m".repeat(121) },
+      { provider: "openai", model: "gpt-6-sol", effort: "extreme" },
+    ];
+    for (const body of badRequests) {
+      const reply = await request("/api/models/check", { cookie, body });
+      assert.equal(reply.status, 400, JSON.stringify(body).slice(0, 80));
+      assert.equal(reply.body.error, "bad request");
+    }
+    const noKey = await request("/api/models/check", { cookie, body: { provider: "anthropic", model: "claude-haiku-5-5", effort: "low" } });
+    assert.equal(noKey.status, 400);
+    assert.equal(noKey.body.error, "Enter your Anthropic API key.");
   });
 });
 
