@@ -9,4 +9,5 @@ export function proxy(request: NextRequest) {
   return NextResponse.redirect(login);
 }
 
-export const config = { matcher: ["/((?!api|login|_next/static|_next/image|favicon.ico).*)"] };
+// public/assets (background music) loads without a session so it can play on the login page too.
+export const config = { matcher: ["/((?!api|login|assets|_next/static|_next/image|favicon.ico).*)"] };

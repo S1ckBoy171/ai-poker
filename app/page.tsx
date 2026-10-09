@@ -225,12 +225,13 @@ export default function Home() {
 
   return (
     <main className="min-h-dvh px-4 pb-16">
-      <header className="mx-auto flex max-w-5xl items-center justify-between py-4">
+      <header className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-y-3 py-4">
         <div className="flex items-center gap-2 font-display text-xl tracking-wide sm:text-2xl">
           <SpadeBadge />
           <BrandName />
         </div>
-        <nav className="flex items-center gap-2 text-sm">
+        {/* below xl the header reaches the corner, so leave room for the music button (app/music-button.tsx) */}
+        <nav className="mr-12 flex items-center gap-2 text-sm sm:mr-14 xl:mr-0">
           <Link href="/play" className={NAV_LINK}>
             Table
           </Link>

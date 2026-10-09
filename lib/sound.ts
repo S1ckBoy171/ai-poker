@@ -1,5 +1,6 @@
-// Table sounds, synthesized with Web Audio (no audio files). Browsers only allow audio after a user gesture,
-// so the context is created lazily and resumed on the first click or key press.
+// Table sounds and background music. A sound plays its recording from public/assets/sounds/<name>.mp3 when
+// that file exists, otherwise a version synthesized with Web Audio. Browsers only allow audio after a user
+// gesture, so the context is created lazily and resumed on the first click or key press.
 
 let audioContext: AudioContext | null = null;
 
@@ -70,9 +71,53 @@ const SOUNDS = {
 
 export type Sound = keyof typeof SOUNDS;
 
-export function play(name: Sound) {
+const RECORDINGS_URL = "/assets/sounds";
+
+// Each file is requested once per page load, so a file added later is picked up after a reload.
+const recordings = new Map<Sound, Promise<AudioBuffer | null>>();
+
+/** The decoded recording for `name`, or null when there is no usable file. */
+function recordingFor(name: Sound): Promise<AudioBuffer | null> {
+  let recording = recordings.get(name);
+  if (!recording) {
+    recording = loadRecording(name);
+    recordings.set(name, recording);
+  }
+  return recording;
+}
+
+async function loadRecording(name: Sound): Promise<AudioBuffer | null> {
   try {
-    SOUNDS[name]();
+    const response = await fetch(`${RECORDINGS_URL}/${name}.mp3`);
+    if (!response.ok) {
+      return null;
+    }
+    const bytes = await response.arrayBuffer();
+    const recording = await audio().decodeAudioData(bytes);
+    return recording;
+  } catch {
+    // network error, no audio support or not a valid audio file: use the synthesized sound
+    return null;
+  }
+}
+
+function playRecording(recording: AudioBuffer) {
+  const context = audio();
+  const source = context.createBufferSource();
+  source.buffer = recording;
+  source.connect(context.destination);
+  source.start();
+}
+
+/** Plays the recording for `name` if there is one, otherwise the synthesized sound. Never rejects. */
+export async function play(name: Sound): Promise<void> {
+  const recording = await recordingFor(name);
+  try {
+    if (recording) {
+      playRecording(recording);
+    } else {
+      SOUNDS[name]();
+    }
   } catch {
     // no audio support: stay silent
   }
@@ -84,5 +129,120 @@ export function unlockAudio() {
     audio();
   } catch {
     // no audio support: nothing to unlock
+  }
+}
+
+// Background music: the tracks in public/assets/music play in order from a random first one, quietly under
+// the table sounds, each fading into the next. Volume goes through Web Audio because iOS ignores an
+// <audio> element's own volume.
+
+const MUSIC_URL = "/assets/music";
+
+/** Overall music level, 0 to 1. Raise it for louder music. */
+const MUSIC_VOLUME = 0.1;
+
+const CROSSFADE_SECONDS = 8;
+const STOP_FADE_SECONDS = 1;
+
+// To add a track, put it in public/assets/music and list it here with its loudness, measured with:
+//   ffmpeg -i <file> -af ebur128 -f null -   (the "I:" value under "Integrated loudness")
+const MUSIC_TRACKS = [
+  { file: "casino-vip-music-edm-casino-lounge-8-469403.mp3", loudness: -13.3 },
+  { file: "casino-vip-music-game-casino-music-3-469380.mp3", loudness: -13.3 },
+  { file: "casino-vip-music-mafia-casino-jazz-2-469343.mp3", loudness: -15.9 },
+  { file: "casino-vip-music-vip-casino-music-7-469284.mp3", loudness: -14.1 },
+  { file: "echobrainz-casino-royal-612527.mp3", loudness: -15.1 },
+];
+
+// Louder tracks are turned down to match the quietest, so no track jumps out of the mix.
+const QUIETEST_LOUDNESS = Math.min(...MUSIC_TRACKS.map((track) => track.loudness));
+
+type MusicTrack = { element: HTMLAudioElement; volume: GainNode; targetVolume: number };
+
+let nextTrackIndex = Math.floor(Math.random() * MUSIC_TRACKS.length);
+
+// The newest track. During a crossfade the previous one is still in `playingTracks`, fading out.
+let currentTrack: MusicTrack | null = null;
+const playingTracks = new Set<MusicTrack>();
+
+/** Ramps `track` from its current volume to `volume` over `seconds`. */
+function fadeTrack(track: MusicTrack, volume: number, seconds: number) {
+  const gain = track.volume.gain;
+  const now = audio().currentTime;
+  gain.cancelScheduledValues(now);
+  gain.setValueAtTime(gain.value, now);
+  gain.linearRampToValueAtTime(volume, now + seconds);
+}
+
+function fadeOutAndStop(track: MusicTrack, seconds: number) {
+  fadeTrack(track, 0, seconds);
+  setTimeout(() => {
+    track.element.pause();
+    track.volume.disconnect();
+    playingTracks.delete(track);
+  }, seconds * 1000);
+}
+
+function startNextTrack() {
+  const { file, loudness } = MUSIC_TRACKS[nextTrackIndex];
+  nextTrackIndex = (nextTrackIndex + 1) % MUSIC_TRACKS.length;
+
+  const context = audio();
+  const element = new Audio(`${MUSIC_URL}/${file}`);
+  const volume = context.createGain();
+  volume.gain.value = 0;
+  context.createMediaElementSource(element).connect(volume).connect(context.destination);
+
+  const loudnessMatch = 10 ** ((QUIETEST_LOUDNESS - loudness) / 20);
+  const track = { element, volume, targetVolume: MUSIC_VOLUME * loudnessMatch };
+  currentTrack = track;
+  playingTracks.add(track);
+
+  // Start the next track while this one still has CROSSFADE_SECONDS to go, so the two overlap.
+  // Until the file's length is known, `duration` is NaN and the comparison is false.
+  element.addEventListener("timeupdate", () => {
+    const secondsLeft = element.duration - element.currentTime;
+    const isEnding = secondsLeft <= CROSSFADE_SECONDS;
+    if (track === currentTrack && isEnding) {
+      startNextTrack();
+      fadeOutAndStop(track, CROSSFADE_SECONDS);
+    }
+  });
+
+  element.play().then(
+    () => {
+      // stopMusic() may have run while the file was loading.
+      if (track === currentTrack) {
+        fadeTrack(track, track.targetVolume, CROSSFADE_SECONDS);
+      }
+    },
+    () => {
+      // Autoplay blocked until the first click or key press, or the file is missing: the next startMusic() retries.
+      track.volume.disconnect();
+      playingTracks.delete(track);
+      if (track === currentTrack) {
+        currentTrack = null;
+      }
+    },
+  );
+}
+
+/** Starts the background music unless it is already playing. Call it again from a click if autoplay was blocked. */
+export function startMusic() {
+  if (currentTrack) {
+    return;
+  }
+  try {
+    startNextTrack();
+  } catch {
+    // no audio support: stay silent
+  }
+}
+
+/** Fades out all background music. */
+export function stopMusic() {
+  currentTrack = null;
+  for (const track of playingTracks) {
+    fadeOutAndStop(track, STOP_FADE_SECONDS);
   }
 }

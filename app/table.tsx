@@ -788,7 +788,8 @@ export function TableHeader({ stack, status, children }: TableHeaderProps) {
       <div className="hidden items-center gap-2 rounded-full border border-gold/40 bg-black/30 px-4 py-1 font-display text-lg md:flex">
         <span className="chip" /> {stack}
       </div>
-      <div className="flex items-center gap-1.5 sm:gap-2">
+      {/* the right margin leaves room for the music button fixed in the corner (app/music-button.tsx) */}
+      <div className="mr-[2.625rem] flex items-center gap-1.5 sm:mr-12 sm:gap-2">
         <span className="mr-2 hidden text-sm text-cream/70 lg:block">{status}</span>
         {children}
       </div>
