@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 127.0.0.1",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -H 127.0.0.1",
     "lint": "eslint",
-    "test": "node lib/poker.test.mts",
-    "postinstall": "prisma generate"
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON lib/poker.test.mts",
+    "postinstall": "prisma generate",
+    "friends": "FRIENDS_ONLY=1 next start -H 0.0.0.0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.132.1",

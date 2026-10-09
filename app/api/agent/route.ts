@@ -1,12 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { PROVIDERS, type Agent } from "@/lib/config";
 import { getAgentKey, getConfig } from "@/lib/db";
+import { ownPageOnly } from "@/lib/guard";
 import { system } from "@/lib/poker";
 
 type Call = { agent: Agent; key: string; prompt: string; signal: AbortSignal };
 
 /** Body: { seat, prompt }. Provider, model, effort and key come from the DB, never from the browser. */
 export async function POST(req: Request) {
+  const denied = ownPageOnly(req);
+  if (denied) return denied;
   const { seat, prompt } = (await req.json().catch(() => ({}))) as { seat?: unknown; prompt?: unknown };
   const agent = Number.isInteger(seat) ? (await getConfig()).agents[seat as number] : undefined;
   if (!agent || typeof prompt !== "string" || prompt.length > 20_000) return Response.json({ error: "bad request" }, { status: 400 });
