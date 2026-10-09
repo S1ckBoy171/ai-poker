@@ -2,29 +2,9 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { EFFORTS, PROVIDERS, type Agent, type Config, type Provider } from "@/lib/config";
+import { Icon } from "./ui";
 
 export type KeyEdits = Record<string, string | null>; // id -> new key, or null to delete
-
-const PATHS = {
-  x: "M18 6 6 18M6 6l12 12",
-  check: "M20 6 9 17l-5-5",
-  up: "m5 12 7-7 7 7M12 19V5",
-  play: "M7 4v16l13-8z",
-  pause: "M7 4h3v16H7zM14 4h3v16h-3z",
-  restart: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5",
-  sliders: "M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4",
-  list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
-  user: "M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM20 21a8 8 0 0 0-16 0",
-  timer: "M10 2h4M12 14l3-3M12 22a8 8 0 1 0 0-16 8 8 0 0 0 0 16z",
-};
-
-export function Icon({ name, className = "h-6 w-6" }: { name: keyof typeof PATHS; className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d={PATHS[name]} />
-    </svg>
-  );
-}
 
 export function SettingsModal({ cfg, hints, onSave, onClose }: { cfg: Config; hints: Record<string, string>; onSave: (c: Config, keys: KeyEdits) => Promise<void>; onClose: () => void }) {
   const [d, setD] = useState(cfg);
@@ -67,8 +47,8 @@ export function SettingsModal({ cfg, hints, onSave, onClose }: { cfg: Config; hi
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 p-4 backdrop-blur-sm sm:p-8" onClick={onClose}>
-      <div role="dialog" aria-modal="true" aria-labelledby="settings-title" className="panel relative mx-auto mt-6 w-full max-w-5xl p-5 sm:p-9" onClick={(e) => e.stopPropagation()}>
+    <div className="anim-fade fixed inset-0 z-50 overflow-y-auto bg-black/70 p-4 backdrop-blur-sm sm:p-8" onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-labelledby="settings-title" className="anim-modal panel relative mx-auto mt-6 w-full max-w-5xl p-5 sm:p-9" onClick={(e) => e.stopPropagation()}>
         <button aria-label="Close" onClick={onClose} className="absolute -right-3 -top-3 grid h-12 w-12 place-items-center rounded-full border-2 border-[#f0d9b5] bg-[#1c0306] shadow-lg hover:bg-[#3a0a10]">
           <Icon name="x" className="h-7 w-7" />
         </button>
