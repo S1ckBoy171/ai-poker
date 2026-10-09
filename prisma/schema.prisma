@@ -23,3 +23,27 @@ model ApiKey {
 
   @@map("api_keys")
 }
+
+/// One finished hand, as the table saw it (board, actions, winners, shown cards). Never the remaining deck.
+model Hand {
+  id        Int      @id @default(autoincrement())
+  gameId    String   @map("game_id")
+  number    Int
+  data      Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([gameId, number])
+  @@index([createdAt])
+  @@map("hands")
+}
+
+/// A human-only table, found by its invite code. `data` holds the whole game (deck and every hand), so it is never sent to players as-is.
+model Table {
+  code      String   @id
+  data      Json
+  version   Int      @default(0) // optimistic lock: a write only lands if nobody changed the table since it was read
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("tables")
+}
