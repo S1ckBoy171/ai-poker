@@ -1,36 +1,35 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Agent Hold'em
 
-## Getting Started
-
-First, run the development server:
+No-limit Texas Hold'em against AI agents (Anthropic, OpenAI, OpenRouter). Next.js 16, Postgres, Prisma ORM 7.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+docker compose up -d       # Postgres on localhost:5432
+echo 'DATABASE_URL="postgresql://poker:poker@localhost:5432/poker"' > .env
+npm install                # also runs prisma generate
+npx prisma migrate deploy  # create tables
+npm run dev                # http://localhost:3000
+npm test                   # poker engine checks
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Any Postgres works: point `DATABASE_URL` at it. After editing `prisma/schema.prisma`, run `npx prisma migrate dev --name <change>` then `npx prisma generate`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Setup
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open **Table settings** (sliders icon, top right):
 
-## Learn More
+- **Table**: 5 or 9 seats, Fast/Normal pace, starting chips, big blind, Auto Re-Buy, Auto Top-Off, play or just watch, reveal AI cards.
+- **Agents & Keys**: one API key per provider, plus an optional key per seat. For each seat: name, provider, model id (free text), and reasoning effort.
 
-To learn more about Next.js, take a look at the following resources:
+Keys and settings are saved in Postgres (`settings` and `api_keys` tables, keys in plaintext). Keys never go back to the browser: the UI only sees masked hints, and `/api/agent` looks up the key for the seat on the server. Seats without a working key are played by a simple house bot, and the error shows in **Table talk**.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Every AI turn is a paid API call, so the game pauses itself when the tab goes to the background, and before a new hand after 5 minutes with no clicks or key presses (`IDLE_MS` in `app/page.tsx`).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Layout
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `lib/poker.ts`: game engine (betting, side pots, hand evaluator), prompt and reply parsing
+- `lib/config.ts`: settings shape and defaults
+- `prisma/schema.prisma`, `prisma/migrations/`: database schema
+- `lib/db.ts`: Prisma queries for settings and API keys
+- `app/api/agent/route.ts`: calls the provider for a seat
+- `app/api/settings/route.ts`: read/save settings and keys
+- `app/page.tsx`, `app/settings.tsx`: table UI and settings modal

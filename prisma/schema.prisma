@@ -1,0 +1,25 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Single row with table + agent settings; shape is validated by normalize() in lib/config.ts.
+model Settings {
+  id     Int  @id @default(1)
+  config Json
+
+  @@map("settings")
+}
+
+/// One key per provider ("anthropic" | "openai" | "openrouter") plus optional per-seat overrides ("seat:0".."seat:8").
+model ApiKey {
+  id        String   @id
+  key       String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("api_keys")
+}
