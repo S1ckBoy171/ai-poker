@@ -469,11 +469,24 @@ export type AgentReply = { action: Action; say?: string };
 export const system = (name: string) =>
   `You are ${name}, an expert no-limit Texas Hold'em player at a table of AI agents. Your goal is to win as many chips as possible. Study the spot, then answer with only a JSON object.`;
 
-/** The spot as the player to act sees it (no opponent hole cards). */
+/** The spot as the player to act sees it (no opponent hole cards), with the Bots table's reply instructions. */
 export function describe(game: Game): string {
+  const { owe, minTo, maxTo, canRaise } = legal(game);
+  const callOrCheck = owe > 0 ? `fold, call ${owe}` : "check";
+  const raiseRange = canRaise ? `, raise to any total between ${minTo} and ${maxTo} (${maxTo} = all-in)` : "";
+
+  return [
+    ...tableLines(game),
+    `Legal actions: ${callOrCheck}${raiseRange}.`,
+    `Reply with only this JSON: {"action":"fold|check|call|raise","amount":<total to raise to, raise only>,"say":"<short table talk, under 12 words>"}`,
+  ].join("\n");
+}
+
+/** The table as the player to act sees it: blinds, their cards, the board, every seat and every action this hand. */
+export function tableLines(game: Game): string[] {
   const seat = game.turn;
   const me = game.players[seat];
-  const { owe, minTo, maxTo, canRaise } = legal(game);
+  const { owe } = legal(game);
 
   const status = (player: Player) => {
     if (!player.cards.length) {
@@ -492,8 +505,6 @@ export function describe(game: Game): string {
     const dealer = i === game.dealer ? " [dealer]" : "";
     return `- ${player.name}${you}${dealer}: stack ${player.stack}, bet this round ${player.bet}${status(player)}`;
   };
-  const callOrCheck = owe > 0 ? `fold, call ${owe}` : "check";
-  const raiseRange = canRaise ? `, raise to any total between ${minTo} and ${maxTo} (${maxTo} = all-in)` : "";
 
   return [
     `No-limit Texas Hold'em, blinds ${game.sb}/${game.bb}. Hand #${game.hand}, ${game.street}.`,
@@ -504,9 +515,7 @@ export function describe(game: Game): string {
     ...game.players.map(seatLine),
     `Action so far this hand:`,
     ...game.history,
-    `Legal actions: ${callOrCheck}${raiseRange}.`,
-    `Reply with only this JSON: {"action":"fold|check|call|raise","amount":<total to raise to, raise only>,"say":"<short table talk, under 12 words>"}`,
-  ].join("\n");
+  ];
 }
 
 /** Read a model's answer: the last {...} in its text, holding an action and optional table talk. Null if unusable. */
