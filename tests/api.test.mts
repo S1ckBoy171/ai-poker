@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { randomInt, randomUUID } from "node:crypto";
 import { before, describe, test } from "node:test";
+import { AGENT_LIMIT, newAgentLayout, REQUIRED_WIRES, type AgentSummary, type SavedAgent } from "../lib/built-agents.ts";
 import { DEFAULTS, type Config } from "../lib/config.ts";
 import type { HandRecord } from "../lib/poker.ts";
 import type { TableView } from "../lib/tables.ts";
@@ -351,6 +352,138 @@ describe("AI agent and model routes (local checks only)", () => {
     const noKey = await request("/api/models/check", { cookie, body: { provider: "anthropic", model: "claude-haiku-5-5", effort: "low" } });
     assert.equal(noKey.status, 400);
     assert.equal(noKey.body.error, "Enter your Anthropic API key.");
+  });
+});
+
+describe("built agents", () => {
+  type AgentBody = ErrorBody & { agent?: SavedAgent; agents?: AgentSummary[] };
+  let cookie = "";
+
+  const agentInput = (name: string) => ({
+    name,
+    prompt: "Play tight and aggressive.",
+    provider: "anthropic",
+    model: "claude-haiku-5-5",
+    effort: "low",
+    layout: { ...newAgentLayout(), wires: REQUIRED_WIRES },
+  });
+
+  async function createAgent(name: string, owner = cookie): Promise<SavedAgent> {
+    const reply = await request<AgentBody>("/api/agents", { cookie: owner, body: agentInput(name) });
+    assert.equal(reply.status, 201, reply.text);
+    assert.ok(reply.body.agent);
+    return reply.body.agent;
+  }
+
+  before(async () => {
+    cookie = await newSession();
+  });
+
+  test("an agent can be created, listed, read, edited and deleted", async () => {
+    const created = await createAgent("River Shark");
+    assert.equal(created.prompt, "Play tight and aggressive.");
+
+    const list = await request<AgentBody>("/api/agents", { cookie });
+    assert.deepEqual(
+      list.body.agents?.map((agent) => agent.name),
+      ["River Shark"],
+    );
+
+    const read = await request<AgentBody>(`/api/agents/${created.id}`, { cookie });
+    assert.equal(read.status, 200);
+    assert.deepEqual(read.body.agent?.layout.wires, REQUIRED_WIRES);
+
+    const edited = await request<AgentBody>(`/api/agents/${created.id}`, {
+      cookie,
+      method: "PUT",
+      body: { ...agentInput("River Whale"), prompt: "Bluff every river." },
+    });
+    assert.equal(edited.status, 200, edited.text);
+    assert.equal(edited.body.agent?.name, "River Whale");
+    assert.equal(edited.body.agent?.prompt, "Bluff every river.");
+
+    const deleted = await request(`/api/agents/${created.id}`, { cookie, method: "DELETE" });
+    assert.equal(deleted.status, 204);
+    const gone = await request(`/api/agents/${created.id}`, { cookie });
+    assert.equal(gone.status, 404);
+  });
+
+  test("another account can't read, edit, test or delete your agent", async () => {
+    const mine = await createAgent("Private Agent");
+    const stranger = await newSession("Stranger");
+    const attempts = [
+      request(`/api/agents/${mine.id}`, { cookie: stranger }),
+      request(`/api/agents/${mine.id}`, { cookie: stranger, method: "PUT", body: agentInput("Stolen") }),
+      request(`/api/agents/${mine.id}`, { cookie: stranger, method: "DELETE" }),
+      request(`/api/agents/${mine.id}/test`, { cookie: stranger, body: { turnSeconds: 30 } }),
+    ];
+    for (const reply of await Promise.all(attempts)) {
+      assert.equal(reply.status, 404, reply.text);
+    }
+    const strangerList = await request<AgentBody>("/api/agents", { cookie: stranger });
+    assert.deepEqual(strangerList.body.agents, []);
+    const stillMine = await request<AgentBody>(`/api/agents/${mine.id}`, { cookie });
+    assert.equal(stillMine.body.agent?.name, "Private Agent");
+  });
+
+  test("names are unique per account", async () => {
+    const first = await createAgent("Twin");
+    const again = await request("/api/agents", { cookie, body: agentInput("Twin") });
+    assert.equal(again.status, 409);
+    assert.equal(again.body.error, 'You already have an agent named "Twin".');
+
+    const other = await createAgent("Not Twin");
+    const rename = await request(`/api/agents/${other.id}`, { cookie, method: "PUT", body: agentInput("Twin") });
+    assert.equal(rename.status, 409);
+    await request(`/api/agents/${first.id}`, { cookie, method: "DELETE" });
+    await request(`/api/agents/${other.id}`, { cookie, method: "DELETE" });
+
+    const someoneElse = await newSession("Someone Else");
+    await createAgent("Twin", someoneElse);
+  });
+
+  test(`an account can have at most ${AGENT_LIMIT} agents`, async () => {
+    const owner = await newSession("Collector");
+    for (let n = 1; n <= AGENT_LIMIT; n++) {
+      await createAgent(`Agent ${n}`, owner);
+    }
+    const oneTooMany = await request("/api/agents", { cookie: owner, body: agentInput("Agent 11") });
+    assert.equal(oneTooMany.status, 409);
+    assert.equal(oneTooMany.body.error, `You have ${AGENT_LIMIT} agents; delete one first.`);
+  });
+
+  test("an incomplete or malformed agent is refused with the reason", async () => {
+    const cases: [unknown, string][] = [
+      [{ ...agentInput("No Wires"), layout: newAgentLayout() }, "Connect the Table state to the Model."],
+      [{ ...agentInput("Blank"), prompt: "  " }, "Write the agent's prompt."],
+      [{ ...agentInput("Nobody"), provider: "acme" }, "Choose a provider for the model."],
+      [{ ...agentInput(""), prompt: "x" }, "Give the agent a name of 1 to 24 characters."],
+      [null, "Give the agent a name of 1 to 24 characters."],
+    ];
+    for (const [body, error] of cases) {
+      const reply = await request("/api/agents", { cookie, body });
+      assert.equal(reply.status, 400, JSON.stringify(body).slice(0, 60));
+      assert.equal(reply.body.error, error);
+    }
+  });
+
+  test("testing an agent needs a listed turn time and a saved key for its provider", async () => {
+    const agent = await createAgent("Tester Agent");
+    for (const turnSeconds of [7, "30", undefined]) {
+      const reply = await request(`/api/agents/${agent.id}/test`, { cookie, body: { turnSeconds } });
+      assert.equal(reply.status, 400, String(turnSeconds));
+      assert.match(reply.body.error ?? "", /^Pick a turn time of 5, 10, 15/);
+    }
+    const noKey = await request(`/api/agents/${agent.id}/test`, { cookie, body: { turnSeconds: 30 } });
+    assert.equal(noKey.status, 400);
+    assert.equal(noKey.body.error, "Add your Anthropic API key first.");
+  });
+
+  test("agents need a signed-in session from the app's own page", async () => {
+    const signedOut = await request("/api/agents", { body: agentInput("Anon") });
+    assert.equal(signedOut.status, 401);
+    const crossSite = await request("/api/agents", { cookie, headers: { "sec-fetch-site": "cross-site" } });
+    assert.equal(crossSite.status, 403);
   });
 });
 

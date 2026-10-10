@@ -1,53 +1,96 @@
-// Server-only: one agent turn sent to its provider (Anthropic, OpenAI or OpenRouter) with the account's key.
+// Server-only: calls to an agent's provider (Anthropic, OpenAI or OpenRouter) with the account's key.
 import Anthropic from "@anthropic-ai/sdk";
-import type { Agent } from "./config";
-import { system } from "./poker";
+import type { Agent } from "./config.ts";
+import { system as botSystemPrompt } from "./poker.ts";
 
 export type AgentCall = { agent: Agent; key: string; prompt: string; signal: AbortSignal };
 
+/** One turn of a conversation with a model. A conversation starts with the user. */
+export type ChatMessage = { role: "user" | "assistant"; content: string };
+
+export type ModelSettings = Pick<Agent, "provider" | "model" | "effort">;
+
+/** A call to a model: its instructions, the conversation so far and, optionally, the JSON schema its answer must follow. */
+export type ModelRequest = {
+  agent: ModelSettings;
+  key: string;
+  system: string;
+  messages: ChatMessage[];
+  schema?: Record<string, unknown>;
+  signal: AbortSignal;
+};
+
+const MAX_TOKENS = 16000;
+const SCHEMA_NAME = "poker_move";
+
+/** The HTTP status a provider answered a failed request with, if there was one. */
+export function errorStatus(error: unknown): number | undefined {
+  if (error instanceof Anthropic.APIError) {
+    return error.status;
+  }
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === "number" ? status : undefined;
+}
+
 /** True when the provider refused the API key itself (401 or 403), as opposed to the request. */
 export function isKeyRejected(error: unknown): boolean {
-  const status = error instanceof Anthropic.APIError ? error.status : (error as { status?: number }).status;
+  const status = errorStatus(error);
   return status === 401 || status === 403;
 }
 
-/** The agent's reply text. A failed request throws the provider's error, carrying its HTTP status. */
-export function askAgent(call: AgentCall): Promise<string> {
-  if (call.agent.provider === "anthropic") {
-    return askClaude(call);
-  }
-  if (call.agent.provider === "openai") {
-    return askOpenAI(call);
-  }
-  return askOpenRouter(call);
+/** True when Claude declined to answer (stop reason "refusal") instead of the request failing. */
+export function isRefusal(error: unknown): boolean {
+  return (error as { refused?: unknown } | null)?.refused === true;
 }
 
-async function askClaude({ agent, key, prompt, signal }: AgentCall) {
-  const reasoning = agent.effort !== "default" && { thinking: { type: "adaptive" as const }, output_config: { effort: agent.effort } };
-  const response = await new Anthropic({ apiKey: key }).messages.create(
-    {
-      model: agent.model,
-      max_tokens: 16000,
-      system: system(agent.name),
-      messages: [{ role: "user", content: prompt }],
-      ...reasoning,
-    },
-    { signal },
-  );
+/** The agent's reply text to one prompt, as the Bots table asks it. A failed request throws the provider's error. */
+export function askAgent(call: AgentCall): Promise<string> {
+  return askModel({
+    agent: call.agent,
+    key: call.key,
+    system: botSystemPrompt(call.agent.name),
+    messages: [{ role: "user", content: call.prompt }],
+    signal: call.signal,
+  });
+}
+
+/** The model's reply text. A failed request throws the provider's error, carrying its HTTP status. */
+export function askModel(request: ModelRequest): Promise<string> {
+  if (request.agent.provider === "anthropic") {
+    return askClaude(request);
+  }
+  if (request.agent.provider === "openai") {
+    return askOpenAI(request);
+  }
+  return askOpenRouter(request);
+}
+
+async function askClaude({ agent, key, system, messages, schema, signal }: ModelRequest) {
+  const params: Anthropic.MessageCreateParamsNonStreaming = { model: agent.model, max_tokens: MAX_TOKENS, system, messages };
+  if (agent.effort !== "default") {
+    params.thinking = { type: "adaptive" };
+    params.output_config = { effort: agent.effort };
+  }
+  if (schema) {
+    params.output_config = { ...params.output_config, format: { type: "json_schema", schema } };
+  }
+
+  const response = await new Anthropic({ apiKey: key }).messages.create(params, { signal });
   if (response.stop_reason === "refusal") {
-    throw new Error("model declined to answer");
+    throw Object.assign(new Error("model declined to answer"), { refused: true });
   }
   return response.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
 }
 
 type OpenAIResponse = { output: { type: string; content?: { type: string; text?: string }[] }[] };
 
-async function askOpenAI({ agent, key, prompt, signal }: AgentCall) {
+async function askOpenAI({ agent, key, system, messages, schema, signal }: ModelRequest) {
   const response = await postJson<OpenAIResponse>("https://api.openai.com/v1/responses", key, signal, {
     model: agent.model,
-    instructions: system(agent.name),
-    input: prompt,
+    instructions: system,
+    input: messages,
     ...(agent.effort !== "default" && { reasoning: { effort: agent.effort } }),
+    ...(schema && { text: { format: { type: "json_schema", name: SCHEMA_NAME, schema, strict: true } } }),
   });
   return response.output
     .flatMap((item) => (item.type === "message" ? (item.content ?? []) : []))
@@ -57,14 +100,12 @@ async function askOpenAI({ agent, key, prompt, signal }: AgentCall) {
 
 type OpenRouterResponse = { choices?: { message?: { content?: unknown } }[] };
 
-async function askOpenRouter({ agent, key, prompt, signal }: AgentCall) {
+async function askOpenRouter({ agent, key, system, messages, schema, signal }: ModelRequest) {
   const response = await postJson<OpenRouterResponse>("https://openrouter.ai/api/v1/chat/completions", key, signal, {
     model: agent.model,
-    messages: [
-      { role: "system", content: system(agent.name) },
-      { role: "user", content: prompt },
-    ],
+    messages: [{ role: "system", content: system }, ...messages],
     ...(agent.effort !== "default" && { reasoning: { effort: agent.effort } }),
+    ...(schema && { response_format: { type: "json_schema", json_schema: { name: SCHEMA_NAME, strict: true, schema } } }),
   });
   return String(response.choices?.[0]?.message?.content ?? "");
 }

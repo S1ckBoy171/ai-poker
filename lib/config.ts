@@ -47,6 +47,10 @@ export const MIN_SEATS = 2;
 export const MAX_SEATS = 9;
 export const EFFORTS: Effort[] = ["default", "low", "medium", "high"];
 
+/** The turn-time choices for a match, in seconds: 5 s (quick match) up to 5 minutes. */
+export const TURN_SECONDS = [5, 10, 15, 30, 60, 90, 120, 180, 300];
+export const isTurnSeconds = (value: unknown): value is number => typeof value === "number" && TURN_SECONDS.includes(value);
+
 const agent = (name: string, provider: Provider, model: string): Agent => ({ name, provider, model, effort: "low" });
 
 export const DEFAULTS: Config = {

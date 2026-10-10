@@ -1,6 +1,7 @@
-// Server-only Postgres store via Prisma. Settings, API keys and hands belong to one account (userId) each.
+// Server-only Postgres store via Prisma. Settings, API keys, hands and built agents belong to one account (userId) each.
 import { PrismaPg } from "@prisma/adapter-pg";
-import { normalize, type Config } from "./config";
+import { AGENT_LIMIT, type AgentInput, type AgentLayout, type AgentSummary, type SavedAgent } from "./built-agents";
+import { normalize, type Config, type Effort, type Provider } from "./config";
 import { PrismaClient, type Prisma } from "./generated/prisma/client";
 import type { HandRecord } from "./poker";
 
@@ -70,4 +71,76 @@ export async function saveHand(userId: string, gameId: string, hand: HandRecord)
 export async function recentHands(userId: string, limit = 200) {
   const rows = await prisma.hand.findMany({ where: { userId }, orderBy: { createdAt: "desc" }, take: limit });
   return rows.map((row) => ({ gameId: row.gameId, at: row.createdAt, hand: row.data as unknown as HandRecord }));
+}
+
+// ---- built agents ----
+
+type AgentRow = Prisma.AgentGetPayload<object>;
+
+/** Rows only ever hold agents that passed checkAgentInput, so their provider, effort and layout are known to be valid. */
+function toSavedAgent(row: AgentRow): SavedAgent {
+  return {
+    id: row.id,
+    name: row.name,
+    prompt: row.prompt,
+    provider: row.provider as Provider,
+    model: row.model,
+    effort: row.effort as Effort,
+    layout: row.layout as unknown as AgentLayout,
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+/** Prisma's error code for a failed query: P2002 = a unique field is taken, P2025 = the row to change doesn't exist. */
+const prismaErrorCode = (error: unknown) => (error as { code?: unknown } | null)?.code;
+
+const agentData = (input: AgentInput) => ({ ...input, layout: input.layout as unknown as Prisma.InputJsonObject });
+
+export async function listAgents(userId: string): Promise<AgentSummary[]> {
+  const rows = await prisma.agent.findMany({ where: { userId }, orderBy: { updatedAt: "desc" } });
+  return rows.map((row) => {
+    const { id, name, provider, model, effort, updatedAt } = toSavedAgent(row);
+    return { id, name, provider, model, effort, updatedAt };
+  });
+}
+
+export async function getAgent(userId: string, id: string): Promise<SavedAgent | null> {
+  const row = await prisma.agent.findFirst({ where: { id, userId } });
+  return row && toSavedAgent(row);
+}
+
+export async function createAgent(userId: string, input: AgentInput): Promise<SavedAgent | "limit" | "duplicate name"> {
+  // ponytail: two creates at the same moment can both pass this count; a serializable transaction closes that if it matters
+  const count = await prisma.agent.count({ where: { userId } });
+  if (count >= AGENT_LIMIT) {
+    return "limit";
+  }
+  try {
+    return toSavedAgent(await prisma.agent.create({ data: { userId, ...agentData(input) } }));
+  } catch (error) {
+    if (prismaErrorCode(error) === "P2002") {
+      return "duplicate name";
+    }
+    throw error;
+  }
+}
+
+export async function updateAgent(userId: string, id: string, input: AgentInput): Promise<SavedAgent | "not found" | "duplicate name"> {
+  try {
+    return toSavedAgent(await prisma.agent.update({ where: { id, userId }, data: agentData(input) }));
+  } catch (error) {
+    if (prismaErrorCode(error) === "P2025") {
+      return "not found";
+    }
+    if (prismaErrorCode(error) === "P2002") {
+      return "duplicate name";
+    }
+    throw error;
+  }
+}
+
+/** True if this account had the agent and it is now gone. */
+export async function deleteAgent(userId: string, id: string): Promise<boolean> {
+  const { count } = await prisma.agent.deleteMany({ where: { id, userId } });
+  return count > 0;
 }
