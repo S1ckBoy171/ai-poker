@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { authClient } from "@/lib/auth-client";
+import { AgentBuilder } from "./agent-builder";
 import { MatchSetup } from "./match-setup";
 import { BrandName, SpadeBadge } from "./ui";
 
@@ -179,18 +180,7 @@ export default function Home() {
           </div>
         )}
 
-        {tab === "build" && (
-          <div className="grid place-items-center py-16">
-            <div className="tooltip-wrap">
-              <button aria-disabled="true" aria-describedby="build-tip" className="btn-gold cursor-not-allowed opacity-85">
-                BUILD YOUR AGENT
-              </button>
-              <div id="build-tip" role="tooltip" className="tooltip">
-                Coming soon
-              </div>
-            </div>
-          </div>
-        )}
+        {tab === "build" && <AgentBuilder />}
 
         {tab === "match" && <MatchSetup />}
       </section>

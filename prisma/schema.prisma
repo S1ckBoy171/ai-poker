@@ -43,6 +43,25 @@ model Hand {
   @@map("hands")
 }
 
+/// A player-built agent: its persona prompt, model settings, and the canvas it was built on (see lib/built-agents.ts).
+model Agent {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id") // only this account can read, edit, test or delete it
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  prompt    String
+  provider  String
+  model     String
+  effort    String
+  layout    Json // node positions and wires, for drawing the canvas only
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, name])
+  @@index([userId, updatedAt])
+  @@map("agents")
+}
+
 /// A human-only table, found by its invite code. `data` holds the whole game (deck and every hand), so it is never sent to players as-is.
 model Table {
   code      String   @id
@@ -69,6 +88,7 @@ model User {
   settings      Settings?
   apiKeys       ApiKey[]
   hands         Hand[]
+  agents        Agent[]
 
   @@unique([email])
   @@index([createdAt])

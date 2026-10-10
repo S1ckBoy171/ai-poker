@@ -520,3 +520,23 @@ select:focus-visible {
     display: none;
   }
 }
+
+/* Build Your Agent canvas (React Flow) in the table's colors */
+.agent-canvas .react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke: var(--color-gold);
+  --xy-edge-stroke-selected: #fff3d6;
+  --xy-edge-stroke-width: 2;
+  --xy-connectionline-stroke: var(--color-gold);
+  --xy-handle-background-color: var(--color-gold);
+  --xy-handle-border-color: #22050a;
+  --xy-controls-button-background-color: #22050a;
+  --xy-controls-button-background-color-hover: #5a121b;
+  --xy-controls-button-color: var(--color-cream);
+  --xy-controls-button-border-color: rgba(240, 217, 181, 0.25);
+  --xy-attribution-background-color: transparent;
+}
+.agent-canvas .react-flow__handle {
+  width: 12px;
+  height: 12px;
+}
