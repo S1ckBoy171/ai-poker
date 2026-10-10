@@ -138,8 +138,11 @@ export function unlockAudio() {
 
 const MUSIC_URL = "/assets/music";
 
-/** Overall music level, 0 to 1. Raise it for louder music. */
-const MUSIC_VOLUME = 0.1;
+/** The music's gain with the volume slider all the way up. */
+const LOUDEST_MUSIC = 0.25;
+/** Where the volume slider starts: 40% of the loudest, the quiet level the mix was tuned for. */
+export const DEFAULT_MUSIC_LEVEL = 0.4;
+const VOLUME_CHANGE_SECONDS = 0.15; // a short glide, so dragging the slider doesn't click
 
 const CROSSFADE_SECONDS = 8;
 const STOP_FADE_SECONDS = 1;
@@ -157,13 +160,17 @@ const MUSIC_TRACKS = [
 // Louder tracks are turned down to match the quietest, so no track jumps out of the mix.
 const QUIETEST_LOUDNESS = Math.min(...MUSIC_TRACKS.map((track) => track.loudness));
 
-type MusicTrack = { element: HTMLAudioElement; volume: GainNode; targetVolume: number };
+type MusicTrack = { element: HTMLAudioElement; volume: GainNode; loudnessMatch: number };
 
 let nextTrackIndex = Math.floor(Math.random() * MUSIC_TRACKS.length);
+let musicLevel = DEFAULT_MUSIC_LEVEL;
 
 // The newest track. During a crossfade the previous one is still in `playingTracks`, fading out.
 let currentTrack: MusicTrack | null = null;
 const playingTracks = new Set<MusicTrack>();
+
+/** The track's volume at the slider's level, turned down to the quietest track's loudness. */
+const fullVolume = (track: MusicTrack) => LOUDEST_MUSIC * musicLevel * track.loudnessMatch;
 
 /** Ramps `track` from its current volume to `volume` over `seconds`. */
 function fadeTrack(track: MusicTrack, volume: number, seconds: number) {
@@ -194,7 +201,7 @@ function startNextTrack() {
   context.createMediaElementSource(element).connect(volume).connect(context.destination);
 
   const loudnessMatch = 10 ** ((QUIETEST_LOUDNESS - loudness) / 20);
-  const track = { element, volume, targetVolume: MUSIC_VOLUME * loudnessMatch };
+  const track = { element, volume, loudnessMatch };
   currentTrack = track;
   playingTracks.add(track);
 
@@ -213,7 +220,7 @@ function startNextTrack() {
     () => {
       // stopMusic() may have run while the file was loading.
       if (track === currentTrack) {
-        fadeTrack(track, track.targetVolume, CROSSFADE_SECONDS);
+        fadeTrack(track, fullVolume(track), CROSSFADE_SECONDS);
       }
     },
     () => {
@@ -244,5 +251,13 @@ export function stopMusic() {
   currentTrack = null;
   for (const track of playingTracks) {
     fadeOutAndStop(track, STOP_FADE_SECONDS);
+  }
+}
+
+/** Sets the music volume from the slider, 0 (silent) to 1 (loudest). The playing track follows right away. */
+export function setMusicLevel(level: number) {
+  musicLevel = Math.min(1, Math.max(0, level));
+  if (currentTrack) {
+    fadeTrack(currentTrack, fullVolume(currentTrack), VOLUME_CHANGE_SECONDS);
   }
 }
