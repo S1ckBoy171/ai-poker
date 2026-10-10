@@ -1,7 +1,7 @@
 // Run: npm test
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { play, startMusic, stopMusic } from "./sound.ts";
+import { DEFAULT_MUSIC_LEVEL, play, setMusicLevel, startMusic, stopMusic } from "./sound.ts";
 
 // Node has no Web Audio, so a fake context records what starts playing:
 // a decoded recording, a synthesized noise buffer, or "oscillator" for a synthesized tone.
@@ -155,4 +155,29 @@ test("music fades in quietly, crossfades into the next track near the end, and f
   assert.equal(second.volumeNode?.gain.rampedTo, 0);
   assert.equal(first.paused, true);
   assert.equal(second.paused, true);
+});
+
+test("the volume slider moves the playing track's volume, from silent up to the loudest", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  musicElements.length = 0;
+
+  startMusic();
+  await flushPromises();
+  const [track] = musicElements;
+  const startingVolume = track.volumeNode?.gain.rampedTo ?? 0;
+  assert.ok(startingVolume > 0);
+
+  setMusicLevel(1);
+  const loudest = track.volumeNode?.gain.rampedTo ?? 0;
+  assert.ok(Math.abs(loudest - startingVolume / DEFAULT_MUSIC_LEVEL) < 1e-9, `${loudest} should be ${startingVolume / DEFAULT_MUSIC_LEVEL}`);
+
+  setMusicLevel(0);
+  assert.equal(track.volumeNode?.gain.rampedTo, 0);
+
+  setMusicLevel(5); // out of range: the loudest, not louder
+  assert.equal(track.volumeNode?.gain.rampedTo, loudest);
+
+  stopMusic();
+  t.mock.timers.tick(1000);
+  setMusicLevel(DEFAULT_MUSIC_LEVEL);
 });
