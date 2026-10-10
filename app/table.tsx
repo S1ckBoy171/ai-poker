@@ -5,10 +5,9 @@ import Link from "next/link";
 import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { isShowdown, legal, potTotal, type Action, type Game, type LegalOptions, type Player, type Winner } from "@/lib/poker";
 import { play, unlockAudio, type Sound } from "@/lib/sound";
+import { railPoint, rimFacing, rimPoint, type Point } from "@/lib/table-shape";
 import { BrandName, Card, DIMS, Icon, SpadeBadge, netColor, type IconName } from "./ui";
 
-/** A spot on the table, in % of the table box. */
-type Point = { x: number; y: number };
 /** A running turn clock, drawn as a shrinking bar under that seat's name. */
 export type Timer = { id: string; seat: number; limitMs: number; elapsedMs: number };
 export type LogEntry = { id: number; text: string; say?: string; kind?: "hand" | "error" };
@@ -37,9 +36,37 @@ function dealerAngle(count: number): number {
   return top - Math.min(halfGap, Math.PI / 4);
 }
 
-/** The point at `angle` on an oval of `radius` (1 = the rim), in % of the table box. */
-function pointOnOval(angle: number, radius: number): Point {
-  return { x: 50 + 50 * radius * Math.cos(angle), y: 50 + 50 * radius * Math.sin(angle) };
+/**
+ * The table box on narrow and wide screens (keep in step with .table-box in globals.css): its aspect ratio
+ * (width / height); the padded rail's thickness and the gap between the rail and the chip tray, both as a
+ * share of the box width. The gap leaves room for the dealer's deck, which lies just inside the rail.
+ */
+const TABLE_SHAPES = {
+  narrow: { aspect: 3 / 4, rail: 0.06, trayGap: 0.045 },
+  wide: { aspect: 2, rail: 0.034, trayGap: 0.022 },
+};
+const WIDE_TABLE_QUERY = "(min-width: 640px)";
+
+/** A cup holder in the rail between every two seats, except where the dealer stands. */
+function cupHolderAngles(seatCount: number): number[] {
+  const angles = Array.from({ length: seatCount }, (_, position) => seatAngle(position + 0.5, seatCount));
+  const dealer = dealerAngle(seatCount);
+  const angleBetween = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+  return angles.filter((angle) => angleBetween(angle, dealer) > 0.2);
+}
+
+function subscribeToScreenWidth(listener: () => void) {
+  const query = window.matchMedia(WIDE_TABLE_QUERY);
+  query.addEventListener("change", listener);
+  return () => query.removeEventListener("change", listener);
+}
+
+const isWideScreen = () => window.matchMedia(WIDE_TABLE_QUERY).matches;
+
+/** The table box's shape for this screen: the wide table lies sideways, the narrow one stands up. */
+function useTableShape() {
+  const wide = useSyncExternalStore(subscribeToScreenWidth, isWideScreen, () => true);
+  return wide ? TABLE_SHAPES.wide : TABLE_SHAPES.narrow;
 }
 
 const place = (point: Point): CSSProperties => ({ left: `${point.x}%`, top: `${point.y}%` });
@@ -153,12 +180,17 @@ type TableViewProps = {
 /** Felt, board, pot, chips in motion, dealer button and seats. Seat `me` is drawn at the bottom (-1 = just watching). */
 export function TableView({ game, me, labels, colors, reveal, thinking, timer, bubbles, paused, onResume }: TableViewProps) {
   const seatCount = game.players.length;
+  const shape = useTableShape();
   /** Where something for `seat` sits, turning the table so your own seat is at the bottom. */
   const seatPoint = (seat: number, radius: number, rotation = 0) => {
     const position = me >= 0 ? (seat - me + seatCount) % seatCount : seat;
-    return pointOnOval(seatAngle(position, seatCount) + rotation, radius);
+    return rimPoint(seatAngle(position, seatCount) + rotation, radius, shape.aspect);
   };
-  const dealerSpot = pointOnOval(dealerAngle(seatCount), 1);
+  const dealerSpot = rimPoint(dealerAngle(seatCount), 1, shape.aspect);
+  const chipTray = {
+    spot: railPoint(dealerAngle(seatCount), shape.rail + shape.trayGap, shape.aspect),
+    facing: rimFacing(dealerAngle(seatCount), shape.aspect),
+  };
   const dealtCards = game.players.reduce((sum, player) => sum + player.cards.length, 0);
   const holeCardsMs = dealtCards ? (dealtCards - 1) * DEAL_STEP_MS + DEAL_FLIGHT_MS : 0;
   // The dealer's hand flicks for as long as hole cards are going out, then once per board card.
@@ -179,17 +211,21 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
   const chipRadius = (seat: number, usual: number) => (seat === me ? CHIPS_NEAR_YOU : usual);
 
   return (
-    <div className="table-box">
+    <div className="table-box" style={{ "--rail": `${shape.rail * 100}%` } as CSSProperties}>
       {/* drawn before the rail, so the table hides the dealer's lower half */}
       <RobotDealer hand={game.hand} style={place(dealerSpot)} />
-      <div className="rail absolute inset-0 rounded-[50%] p-[2.4%]">
-        <div className="felt relative h-full w-full rounded-[50%]">
-          <div className="absolute inset-[6%] rounded-[50%] border-2 border-[#ffd9a8]/15" />
+      <div className="rail absolute inset-0 rounded-full">
+        <div className="felt relative h-full w-full rounded-full">
+          <div className="absolute inset-[6%] rounded-full border-2 border-[#ffd9a8]/15" />
           <div className="absolute left-1/2 top-[24%] -translate-x-1/2 select-none whitespace-nowrap font-display text-[clamp(12px,2.2vw,24px)] tracking-[.35em] text-black/25">
             AGENT HOLD&apos;EM
           </div>
         </div>
       </div>
+      {cupHolderAngles(seatCount).map((angle) => (
+        <div key={angle} className="cup-holder" style={place(railPoint(angle, shape.rail / 2, shape.aspect))} aria-hidden />
+      ))}
+      <ChipTray style={{ ...place(chipTray.spot), rotate: `${chipTray.facing}deg` }} />
       <RobotHands key={`${game.hand}-${game.street}`} flicks={flicks} style={place(dealerSpot)} />
 
       <div className="absolute left-1/2 top-1/2 z-[6] flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-2 sm:gap-3">
@@ -296,6 +332,33 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
           timer={timer?.seat === seat && paused == null ? timer : undefined}
           style={place(seatPoint(seat, 1))}
         />
+      ))}
+    </div>
+  );
+}
+
+// The dealer's chip tray: one groove per stack, in the colors of real casino chips.
+const TRAY_STACKS = [
+  { color: "#f1ece2", fill: 0.85 }, // white
+  { color: "#f1ece2", fill: 0.6 },
+  { color: "#c41d28", fill: 0.95 }, // red
+  { color: "#c41d28", fill: 0.7 },
+  { color: "#1f4fbf", fill: 0.8 }, // blue
+  { color: "#17803d", fill: 0.9 }, // green
+  { color: "#17803d", fill: 0.5 },
+  { color: "#1d1d1f", fill: 0.75 }, // black
+  { color: "#1d1d1f", fill: 0.45 },
+  { color: "#6b2fb3", fill: 0.35 }, // purple
+];
+
+/** The chip tray set into the felt in front of the dealer. `style` puts its top edge against the rail. */
+function ChipTray({ style }: { style: CSSProperties }) {
+  return (
+    <div className="chip-tray" style={style} aria-hidden>
+      {TRAY_STACKS.map((stack, groove) => (
+        <div key={groove} className="chip-groove">
+          <div className="chip-stack" style={{ "--chip": stack.color, height: `${stack.fill * 100}%` } as CSSProperties} />
+        </div>
       ))}
     </div>
   );
