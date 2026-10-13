@@ -7,6 +7,7 @@ import { authClient } from "@/lib/auth-client";
 import { fetchJson } from "@/lib/fetch-json";
 import { playersWithChips, type Game } from "@/lib/poker";
 import { play } from "@/lib/sound";
+import { seatChair } from "@/lib/table-shape";
 import type { SeatAction, TableView as View } from "@/lib/tables";
 import { ActionBar, HeaderButton, LogPanel, StatsPanel, TableHeader, TableView, useMuted, useTableSounds, yourTurnLine, type LogEntry, type Timer } from "../../table";
 
@@ -15,7 +16,8 @@ const MAX_SEATS = 9;
 const POLL_MS = 1000;
 const COPIED_MS = 2000; // how long "LINK COPIED" shows
 
-const colorFor = (seat: number) => COLORS[seat % COLORS.length];
+/** A player's color goes with their chair, so it stays theirs when someone joins and seat numbers shift. */
+const colorFor = (seat: number, playerCount: number) => COLORS[seatChair(seat, playerCount) % COLORS.length];
 
 // Your seat's secret token for this table lives only in this browser.
 const tokenKey = (code: string) => `agent-holdem-table:${code}`;
@@ -207,7 +209,7 @@ export function FriendTable() {
         <ul className="mt-3 flex flex-wrap justify-center gap-2">
           {view.names.map((seatName, seat) => (
             <li key={seat} className="anim-pop flex items-center gap-2 rounded-full bg-black/35 py-1 pl-1 pr-3 ring-1 ring-gold/25">
-              <span className="grid h-7 w-7 place-items-center rounded-full font-display text-sm text-white" style={{ background: colorFor(seat) }}>
+              <span className="grid h-7 w-7 place-items-center rounded-full font-display text-sm text-white" style={{ background: colorFor(seat, view.names.length) }}>
                 {seatName.slice(0, 2).toUpperCase()}
               </span>
               {seat === me ? `${seatName} (you)` : seatName}
@@ -260,7 +262,7 @@ export function FriendTable() {
           game={game}
           me={me}
           labels={labels}
-          colors={labels.map((_, seat) => colorFor(seat))}
+          colors={labels.map((_, seat) => colorFor(seat, labels.length))}
           thinking={!handOver && game.turn !== me ? { seat: game.turn } : undefined}
           timer={timer}
         />

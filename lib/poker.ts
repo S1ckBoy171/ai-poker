@@ -155,7 +155,10 @@ export function handValue(cards: Card[]): number {
 
 const handCategory = (value: number) => Math.floor(value / CATEGORY_SIZE);
 
-export const handName = (value: number) => HAND_NAMES[handCategory(value)];
+/** The best hand of all, the ace-high straight flush, has a name of its own. */
+const ROYAL_FLUSH = score(CATEGORY.straightFlush, [14]);
+
+export const handName = (value: number) => (value === ROYAL_FLUSH ? "Royal Flush" : HAND_NAMES[handCategory(value)]);
 
 /** The 5 cards that make the best hand out of 5-7 (tries every 5-card subset: at most 21). */
 export function bestFive(cards: Card[]): Card[] {
@@ -264,10 +267,19 @@ export function startHand(previous: Game): Game {
   return advance(game);
 }
 
-/** Seat someone new at the end of the table; they sit out until the next hand is dealt. */
-export function addPlayer(previous: Game, name: string, stack: number): Game {
+/**
+ * Seat someone new at `seat`; they sit out until the next hand is dealt. Players from that seat on move up one
+ * seat number, and everything that points at a seat follows its player.
+ */
+export function addPlayer(previous: Game, name: string, stack: number, seat: number): Game {
   const game = structuredClone(previous);
-  game.players.push(newPlayer(name, stack));
+  game.players.splice(seat, 0, newPlayer(name, stack));
+
+  const movedSeat = (old: number) => (old >= seat ? old + 1 : old);
+  game.dealer = movedSeat(game.dealer);
+  game.turn = movedSeat(game.turn); // -1 (nobody to act) stays -1
+  game.winners = game.winners.map((winner) => ({ ...winner, seat: movedSeat(winner.seat) }));
+  game.swept = game.swept.map((bet) => ({ ...bet, seat: movedSeat(bet.seat) }));
   return game;
 }
 
