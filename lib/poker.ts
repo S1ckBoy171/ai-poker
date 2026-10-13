@@ -293,14 +293,32 @@ export function viewFor(game: Game, seat: number): Game {
   return { ...game, deck: [], players };
 }
 
+/**
+ * The bet `seat` has to match to stay in the hand. Once everyone else still in is all-in, that is the biggest of
+ * their all-ins, even when the table's bet is higher (a big blind too short to post in full): nobody has to put in
+ * chips that no one is left to win.
+ */
+function betToMatch(game: Game, seat: number): number {
+  const opponents = game.players.filter((player, other) => other !== seat && isInHand(player));
+  if (opponents.some(canAct)) {
+    return game.currentBet;
+  }
+  const biggestAllIn = Math.max(...opponents.map((player) => player.bet));
+  return Math.min(game.currentBet, biggestAllIn);
+}
+
 /** What the player to act may do. */
 export function legal(game: Game): LegalOptions {
   const player = game.players[game.turn];
-  const owe = Math.min(game.currentBet - player.bet, player.stack);
+  const owe = Math.min(betToMatch(game, game.turn) - player.bet, player.stack);
   const maxTo = player.bet + player.stack;
   const minTo = Math.min(game.currentBet + game.minRaise, maxTo);
   const opponentCanAct = game.players.some((other, seat) => seat !== game.turn && canAct(other));
-  return { owe, minTo, maxTo, canRaise: opponentCanAct && maxTo > game.currentBet };
+  // Having acted, you may only raise again when facing a full raise: an all-in for less doesn't reopen the
+  // betting, though several of them that add up to a full raise do.
+  const facing = game.currentBet - player.bet;
+  const bettingIsOpen = !player.acted || facing >= game.minRaise;
+  return { owe, minTo, maxTo, canRaise: opponentCanAct && bettingIsOpen && maxTo > game.currentBet };
 }
 
 /** Coerce any requested action into the closest legal one. */
@@ -323,6 +341,7 @@ export function legalize(game: Game, action: Action): Action {
 export function act(previous: Game, action: Action): Game {
   const game = structuredClone(previous);
   const player = game.players[game.turn];
+  const { owe } = legal(game);
   const tableBetBefore = game.currentBet;
   const playerBetBefore = player.bet;
   const isOpeningBet = !tableBetBefore;
@@ -332,7 +351,7 @@ export function act(previous: Game, action: Action): Game {
       player.folded = true;
       break;
     case "call":
-      putChipsIn(player, tableBetBefore - player.bet);
+      putChipsIn(player, owe);
       break;
     case "raise":
       putChipsIn(player, action.amount! - player.bet); // legalize always sets a raise amount
@@ -340,11 +359,16 @@ export function act(previous: Game, action: Action): Game {
   }
 
   if (player.bet > game.currentBet) {
-    // ponytail: a short all-in raise reopens betting for everyone; strict rules only let them call or fold
-    game.minRaise = Math.max(game.minRaise, player.bet - game.currentBet);
+    const raisedBy = player.bet - game.currentBet;
     game.currentBet = player.bet;
-    for (const other of game.players) {
-      other.acted = false;
+    // Only a full bet or raise reopens the betting. An all-in for less leaves the players who already acted to
+    // call it or fold (see legal), and the size the next raise must be stays as it was.
+    const isFullRaise = raisedBy >= game.minRaise;
+    if (isFullRaise) {
+      game.minRaise = raisedBy;
+      for (const other of game.players) {
+        other.acted = false;
+      }
     }
   }
   player.acted = true;
@@ -371,8 +395,9 @@ function advance(game: Game): Game {
 
   const actors = game.players.filter(canAct);
   const stillToAct = (player: Player) => canAct(player) && (!player.acted || player.bet < game.currentBet);
-  // With one player (or none) able to bet, the round is over once nobody owes chips.
-  const roundOver = actors.length <= 1 ? actors.every((player) => player.bet >= game.currentBet) : !actors.some(stillToAct);
+  // With one player (or none) able to bet, the round is over once they have matched the biggest all-in.
+  const owesChips = (player: Player) => player.bet < betToMatch(game, game.players.indexOf(player));
+  const roundOver = actors.length <= 1 ? !actors.some(owesChips) : !actors.some(stillToAct);
   if (!roundOver) {
     game.turn = nextSeat(game, game.turn, stillToAct);
     return game;
@@ -413,10 +438,13 @@ function sweep(game: Game) {
   }
 }
 
+/** How many seats `seat` is past the first one left of the dealer button, going clockwise. */
+const seatsPastButton = (game: Game, seat: number) => (seat - game.dealer - 1 + game.players.length) % game.players.length;
+
 /**
  * Split the pot into side pots and decide who wins each. Every distinct all-in level among the players
  * still in caps a pot that only those who reached it can win; tied winners share it, odd chips going
- * to the earliest seats. Returns the chips won per seat.
+ * to the first of them left of the dealer button. Returns the chips won per seat.
  */
 function splitPots(game: Game, contenders: number[], scores: number[]): Map<number, number> {
   const winnings = new Map<number, number>();
@@ -431,10 +459,12 @@ function splitPots(game: Game, contenders: number[], scores: number[]): Map<numb
     const potWinners = eligible.filter((seat) => scores[seat] === bestScore);
     const share = Math.floor(pot / potWinners.length);
     const oddChips = pot % potWinners.length;
-    potWinners.forEach((seat, order) => {
-      const oddChip = order < oddChips ? 1 : 0;
+    const nearestButtonFirst = [...potWinners].sort((a, b) => seatsPastButton(game, a) - seatsPastButton(game, b));
+    const oddChipSeats = new Set(nearestButtonFirst.slice(0, oddChips));
+    for (const seat of potWinners) {
+      const oddChip = oddChipSeats.has(seat) ? 1 : 0;
       winnings.set(seat, (winnings.get(seat) ?? 0) + share + oddChip);
-    });
+    }
     floor = level;
   });
   return winnings;
