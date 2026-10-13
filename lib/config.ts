@@ -37,6 +37,20 @@ export const PROVIDER_IDS = Object.keys(PROVIDERS) as Provider[];
 
 export const isProvider = (value: unknown): value is Provider => typeof value === "string" && Object.hasOwn(PROVIDERS, value);
 
+/** Guess the provider from the key's prefix. */
+export function guessProvider(key: string): Provider | null {
+  if (key.startsWith("sk-ant-")) {
+    return "anthropic";
+  }
+  if (key.startsWith("sk-or-")) {
+    return "openrouter";
+  }
+  if (key.startsWith("sk-")) {
+    return "openai";
+  }
+  return null;
+}
+
 /** A model an API key can use, as /api/models lists it. */
 export type ModelOption = {
   id: string;

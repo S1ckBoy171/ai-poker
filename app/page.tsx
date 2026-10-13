@@ -15,7 +15,7 @@ const TABS: [Tab, string][] = [
   ["match", "Start Match with Bots"],
   ["friends", "Play with Friends"],
 ];
-const NAV_LINK = "rounded-full px-3 py-1.5 text-cream/80 ring-1 ring-gold/30 transition-colors hover:bg-black/30 hover:text-cream";
+const NAV_LINK = "whitespace-nowrap rounded-full px-3 py-1.5 text-cream/80 ring-1 ring-gold/30 transition-colors hover:bg-black/30 hover:text-cream";
 
 export default function Home() {
   const router = useRouter();
@@ -78,13 +78,19 @@ export default function Home() {
           <SpadeBadge />
           <BrandName />
         </div>
-        {/* below xl the header reaches the corner, so leave room for the music button (app/music-button.tsx) */}
-        <nav className="mr-12 flex items-center gap-2 text-sm sm:mr-14 xl:mr-0">
+        {/*
+          Below xl the header reaches the corner, so leave room for the music button (app/music-button.tsx).
+          Under 400px the nav always wraps onto its own row below that button, and needs the full width.
+        */}
+        <nav className="flex flex-wrap items-center gap-2 text-sm min-[400px]:mr-12 sm:mr-14 xl:mr-0">
           <Link href="/play" className={NAV_LINK}>
             Table
           </Link>
           <Link href="/history" className={NAV_LINK}>
             History
+          </Link>
+          <Link href="/keys" className={NAV_LINK}>
+            My keys
           </Link>
           {session && (
             <span className="ml-2 hidden max-w-40 truncate text-cream/70 sm:inline" title={session.user.email}>

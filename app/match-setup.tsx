@@ -3,7 +3,7 @@
 // "Start Match with Bots": who plays, the API keys the bots may use, and the bots at the table.
 import { useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useState, type FormEvent } from "react";
-import { EFFORTS, MAX_SEATS, PROVIDERS, PROVIDER_IDS, type Agent, type Config, type ModelOption, type Provider } from "@/lib/config";
+import { EFFORTS, MAX_SEATS, PROVIDERS, PROVIDER_IDS, guessProvider, type Agent, type Config, type ModelOption, type Provider } from "@/lib/config";
 import { fetchJson } from "@/lib/fetch-json";
 import { defaultModel, fitToKeys, numberRepeats, seatNameFor, type BotChoice, type Catalog } from "@/lib/match-bots";
 import type { SettingsResponse } from "./api/settings/route";
@@ -29,20 +29,6 @@ const STATUS_COLORS: Record<Status["kind"], string> = {
 };
 const OPENROUTER_MODELS_LIST = "openrouter-models"; // datalist id: suggestions for the free-text OpenRouter model
 const JSON_HEADERS = { "Content-Type": "application/json" };
-
-/** Guess the provider from the key's prefix. */
-function guessProvider(key: string): Provider | null {
-  if (key.startsWith("sk-ant-")) {
-    return "anthropic";
-  }
-  if (key.startsWith("sk-or-")) {
-    return "openrouter";
-  }
-  if (key.startsWith("sk-")) {
-    return "openai";
-  }
-  return null;
-}
 
 function catalogOf(rows: KeyRow[]): Catalog {
   const catalog: Catalog = new Map();

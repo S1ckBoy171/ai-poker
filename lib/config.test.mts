@@ -1,7 +1,14 @@
 // Run: npm test
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULTS, KEY_ID, normalize } from "./config.ts";
+import { DEFAULTS, KEY_ID, guessProvider, normalize } from "./config.ts";
+
+test("a pasted key's prefix tells which provider it is for", () => {
+  assert.equal(guessProvider("sk-ant-api03-abc"), "anthropic");
+  assert.equal(guessProvider("sk-or-v1-abc"), "openrouter");
+  assert.equal(guessProvider("sk-proj-abc"), "openai");
+  assert.equal(guessProvider("abc"), null);
+});
 
 test("missing or malformed settings fall back to the defaults", () => {
   assert.deepEqual(normalize(undefined), DEFAULTS);
