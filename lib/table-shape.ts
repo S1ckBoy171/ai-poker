@@ -77,3 +77,31 @@ export function rimFacing(angle: number, aspect: number): number {
   const hit = rimHit(angle, aspect);
   return (Math.atan2(hit.normalX, -hit.normalY) * 180) / Math.PI;
 }
+
+// ---- spots round the table ----
+
+/** The table has 10 fixed spots, evenly spaced: the dealer's at the top center and 9 seats. */
+export const SPOT_COUNT = 10;
+export const DEALER_SPOT = 5;
+/** The 9 seat spots, clockwise from the bottom center, which is always yours. */
+export const SEAT_SPOTS = [0, 1, 2, 3, 4, 6, 7, 8, 9];
+
+/** The angle of a spot, for `rimPoint` and friends: 0 at the bottom center, then clockwise. Fractions fall between spots. */
+export const spotAngle = (spot: number) => Math.PI / 2 + (spot * 2 * Math.PI) / SPOT_COUNT;
+
+/**
+ * The order the 9 seat spots fill as players sit down, as indexes into SEAT_SPOTS. Each seat keeps its spot for
+ * good, so nobody moves when someone joins a running table, and every early arrival lands well apart from the
+ * others: 5 players sit evenly, 7 in a mirror image.
+ */
+const FILL_ORDER = [0, 5, 2, 7, 4, 3, 6, 1, 8];
+
+/**
+ * The spot where `seat` sits as `viewer` sees the table: the table is turned so the viewer's own seat is at the
+ * bottom center, keeping the dealer at the top. A viewer of -1 is only watching and sees seat 0 at the bottom.
+ */
+export function seatSpot(seat: number, viewer: number): number {
+  const bottomSeat = viewer >= 0 ? viewer : 0;
+  const turned = FILL_ORDER[seat] - FILL_ORDER[bottomSeat] + SEAT_SPOTS.length;
+  return SEAT_SPOTS[turned % SEAT_SPOTS.length];
+}
