@@ -4,8 +4,9 @@
 import Link from "next/link";
 import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { isShowdown, legal, potTotal, type Action, type Game, type LegalOptions, type Player, type Winner } from "@/lib/poker";
-import { play, unlockAudio, type Sound } from "@/lib/sound";
+import { play, unlockAudio } from "@/lib/sound";
 import { DEALER_SPOT, SEAT_SPOTS, SPOT_COUNT, railPoint, rimFacing, rimPoint, seatSpot, spotAngle, type Point } from "@/lib/table-shape";
+import { DEAL_STEP_MS, holeCardCount, soundsForUpdate } from "@/lib/table-sounds";
 import { BrandName, Card, DIMS, Icon, SpadeBadge, netColor, type IconName } from "./ui";
 
 /** A running turn clock, drawn as a shrinking bar under that seat's name. */
@@ -14,10 +15,8 @@ export type LogEntry = { id: number; text: string; say?: string; kind?: "hand" |
 
 const POT: Point = { x: 50, y: 39 }; // where the pot pill sits
 const BOARD_DELAY = [0, 110, 220, 0, 0]; // flop cards land one after another
-const DEAL_STEP_MS = 70; // between hole cards as they go round the table
 const DEAL_FLIGHT_MS = 320; // a card's trip from the deck to a seat (matches .deal-fly in globals.css)
 const FLICK_MS = 240; // one flick of the dealer's hand (matches .robot-flick in globals.css)
-const SOUND_GAP_MS = 140; // between sounds for one game update
 
 /** The robot dealer and its chip tray always stand at the top center (see SEAT_SPOTS in lib/table-shape.ts). */
 const DEALER_ANGLE = spotAngle(DEALER_SPOT);
@@ -77,16 +76,6 @@ function fly(from: Point, to: Point) {
 
 export const clampTo = (options: LegalOptions, amount: number) => Math.min(options.maxTo, Math.max(options.minTo, amount));
 
-// The first pattern a history line matches picks its sound.
-const SOUND_PATTERNS: [RegExp, Sound][] = [
-  [/ wins /, "win"],
-  [/ folds/, "fold"],
-  [/ checks/, "check"],
-  [/ (calls|bets|raises)/, "chip"],
-  [/^(flop|turn|river): /, "card"],
-];
-const soundFor = (line: string) => SOUND_PATTERNS.find(([pattern]) => pattern.test(line))?.[1];
-
 const MUTE_KEY = "agent-holdem-muted";
 const muteListeners = new Set<() => void>();
 
@@ -136,15 +125,9 @@ export function useTableSounds(game: Game | null, me: number, muted: boolean) {
     if (!before || !game || before === game || muted) {
       return;
     }
-    const newHand = before.hand !== game.hand;
-    const newLines = game.history.slice(before.history.length);
-    const lineSounds = newLines.map(soundFor).filter((sound): sound is Sound => !!sound);
-    const sounds: Sound[] = newHand ? ["deal"] : [...new Set(lineSounds)];
-    const turnJustCame = before.turn !== me || before.street !== game.street || newHand;
-    if (me >= 0 && game.turn === me && turnJustCame) {
-      sounds.push("turn");
+    for (const { sound, delayMs } of soundsForUpdate(before, game, me)) {
+      setTimeout(() => play(sound), delayMs);
     }
-    sounds.forEach((sound, i) => setTimeout(() => play(sound), i * SOUND_GAP_MS));
   }, [game, me, muted]);
 }
 
@@ -175,7 +158,7 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
     spot: railPoint(DEALER_ANGLE, shape.rail + shape.trayGap, shape.aspect),
     facing: rimFacing(DEALER_ANGLE, shape.aspect),
   };
-  const dealtCards = game.players.reduce((sum, player) => sum + player.cards.length, 0);
+  const dealtCards = holeCardCount(game);
   const holeCardsMs = dealtCards ? (dealtCards - 1) * DEAL_STEP_MS + DEAL_FLIGHT_MS : 0;
   // The dealer's hand flicks for as long as hole cards are going out, then once per board card.
   const flicks = { preflop: Math.ceil(holeCardsMs / FLICK_MS), flop: 3, turn: 1, river: 1, done: 0 }[game.street];
