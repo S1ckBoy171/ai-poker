@@ -10,7 +10,7 @@ const SOUND_PATTERNS: [RegExp, Sound][] = [
   [/ wins /, "win"],
   [/ folds/, "fold"],
   [/ checks/, "check"],
-  [/ (calls|bets|raises)/, "chip"],
+  [/ (calls|bets|raises)/, "chips"],
   [/^(flop|turn|river): /, "card"],
 ];
 const soundFor = (line: string) => SOUND_PATTERNS.find(([pattern]) => pattern.test(line))?.[1];
@@ -33,7 +33,8 @@ export function soundsForUpdate(before: Game, game: Game, me: number): TimedSoun
 
   const newLines = newHand ? [] : game.history.slice(before.history.length); // a new hand starts its history over
   const lineSounds = newLines.map(soundFor).filter((sound): sound is Sound => !!sound);
-  const laterSounds = [...new Set(lineSounds)];
+  // every bet is heard; any other sound plays once, however many of the new lines ask for it
+  const laterSounds = lineSounds.filter((sound, i) => sound === "chips" || lineSounds.indexOf(sound) === i);
   const turnJustCame = before.turn !== me || before.street !== game.street || newHand;
   if (me >= 0 && game.turn === me && turnJustCame) {
     laterSounds.push("turn");

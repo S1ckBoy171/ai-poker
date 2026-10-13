@@ -51,7 +51,7 @@ function noise(delay: number, duration: number, volume: number, frequency: numbe
 
 const SOUNDS = {
   card: () => noise(0, 0.06, 0.45, 2600),
-  chip: () => {
+  chips: () => {
     tone(2600, 0, 0.06, "triangle", 0.1);
     tone(3400, 0.035, 0.08, "triangle", 0.08);
   },

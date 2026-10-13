@@ -37,10 +37,31 @@ test("when a new hand starts on your turn, the turn sound waits for the last car
   assert.deepEqual(sounds, [...cardSounds(6), { sound: "turn", delayMs: 6 * DEAL_STEP_MS }]);
 });
 
-test("during a hand, a bet plays the chip sound right away", () => {
+test("during a hand, a bet plays the chips sound right away", () => {
   const { dealt } = firstHand(["You", "Ann", "Bob"]);
 
-  assert.deepEqual(soundsForUpdate(dealt, after(dealt, { type: "call" }), WATCHING), [{ sound: "chip", delayMs: 0 }]);
+  assert.deepEqual(soundsForUpdate(dealt, after(dealt, { type: "call" }), WATCHING), [{ sound: "chips", delayMs: 0 }]);
+});
+
+test("every bet in an update is heard, one after another", () => {
+  const { dealt } = firstHand(["You", "Ann", "Bob"]);
+  const twoBetsLater = after(after(dealt, { type: "raise", amount: 60 }), { type: "call" });
+
+  assert.deepEqual(soundsForUpdate(dealt, twoBetsLater, WATCHING), [
+    { sound: "chips", delayMs: 0 },
+    { sound: "chips", delayMs: 140 },
+  ]);
+});
+
+test("any other sound plays once per update, however many lines ask for it", () => {
+  const { dealt } = firstHand(["You", "Ann", "Bob"]);
+  const everyoneFolded = after(after(dealt, { type: "fold" }), { type: "fold" });
+
+  assert.equal(everyoneFolded.street, "done");
+  assert.deepEqual(soundsForUpdate(dealt, everyoneFolded, WATCHING), [
+    { sound: "fold", delayMs: 0 },
+    { sound: "win", delayMs: 140 },
+  ]);
 });
 
 test("the check that closes the betting, the flop and your turn sound one after another", () => {

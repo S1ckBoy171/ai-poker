@@ -116,12 +116,12 @@ test("a sound with a file plays the recording instead of the synthesized version
 test("a sound without a file plays the synthesized version and asks for the file only once", async () => {
   started.length = 0;
 
-  await play("chip");
-  await play("chip");
+  await play("check");
+  await play("check");
 
   assert.deepEqual(started, ["oscillator", "oscillator", "oscillator", "oscillator"]);
-  const chipRequests = requestedUrls.filter((url) => url === "/assets/sounds/chip.mp3");
-  assert.equal(chipRequests.length, 1);
+  const checkRequests = requestedUrls.filter((url) => url === "/assets/sounds/check.mp3");
+  assert.equal(checkRequests.length, 1);
 });
 
 test("music fades in quietly, crossfades into the next track near the end, and fades out on stop", async (t) => {
