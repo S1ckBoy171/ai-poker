@@ -268,6 +268,76 @@ describe("betting", () => {
     assert.equal(game.players[0].allIn, true);
   });
 
+  test("an all-in for less than a full raise: players yet to act may raise, those who already acted may only call or fold", () => {
+    let game: Game = newGame(["A", "B", "C", "D"], 1000, 20);
+    game.players[0].stack = 130;
+    game = startHand(game); // A has the button, B and C the blinds, D acts first
+    game = play(game, { type: "raise", amount: 100 }, { type: "raise", amount: 130 }); // D raises by 80, A is all-in for 30 more
+    assert.equal(game.history.at(-1), "preflop: A raises to 130 (all-in)");
+    assert.equal(game.minRaise, 80, "the next raise must still be 80 or more");
+
+    assert.equal(game.turn, 1);
+    assert.deepEqual(legal(game), { owe: 120, minTo: 210, maxTo: 1000, canRaise: true }, "B has not acted yet");
+    game = play(game, { type: "call" }, { type: "fold" });
+
+    assert.equal(game.turn, 3);
+    assert.equal(legal(game).owe, 30);
+    assert.equal(legal(game).canRaise, false, "D already raised and faces less than a full raise");
+    assert.deepEqual(legalize(game, { type: "raise", amount: 500 }), { type: "call" });
+    game = play(game, { type: "call" });
+    assert.equal(game.street, "flop");
+  });
+
+  test("all-ins for less that add up to a full raise reopen the betting, but only for players facing that much", () => {
+    let game: Game = newGame(["A", "B", "C", "D", "E"], 2000, 100);
+    game.players[1].stack = 225;
+    game.players[3].stack = 300;
+    game.dealer = 3; // E gets the button, so A acts first after the flop
+    game = play(startHand(game), { type: "call" }, { type: "call" }, { type: "call" }, { type: "call" }, { type: "check" });
+    assert.equal(game.street, "flop");
+
+    // A bets 100, B is all-in for 125, C calls, D is all-in for 200, E calls.
+    game = play(game, { type: "raise", amount: 100 }, { type: "raise", amount: 125 }, { type: "call" }, { type: "raise", amount: 200 }, { type: "call" });
+    assert.equal(game.turn, 0);
+    assert.equal(legal(game).owe, 100);
+    assert.equal(legal(game).canRaise, true, "A faces 100 more, a full raise");
+
+    game = play(game, { type: "call" });
+    assert.equal(game.turn, 2);
+    assert.equal(legal(game).owe, 75);
+    assert.equal(legal(game).canRaise, false, "C faces only 75 more");
+  });
+
+  test("heads-up, a big blind too short to post in full leaves nothing to call: the board runs out", () => {
+    const seated = newGame(["A", "B"], 1000, 20);
+    seated.players[1].stack = 5;
+    const game = startHand(seated); // A has the button and posts 10, B is all-in for 5
+
+    assert.equal(game.street, "done");
+    assert.equal(game.board.length, 5);
+    assert(!game.history.some((line) => line.includes("calls") || line.includes("folds")), "nobody was asked to act");
+    const [stackA, stackB] = game.players.map((player) => player.stack);
+    assert.equal(stackA + stackB, 1005);
+    assert(stackA === 1005 || stackA === 995 || stackA === 1000, `A can win or lose 5, or split: ${stackA}`);
+  });
+
+  test("the last player able to bet only has to match the biggest all-in", () => {
+    let game: Game = newGame(["A", "B", "C"], 1000, 20);
+    game.players[2].stack = 15;
+    game = startHand(game); // A has the button, B posts 10, C is all-in for 15 of the big blind of 20
+
+    assert.equal(game.turn, 0);
+    assert.equal(legal(game).owe, 20, "with B still to act, the full big blind stands");
+    game = play(game, { type: "fold" });
+
+    assert.equal(game.turn, 1);
+    assert.deepEqual(legal(game), { owe: 5, minTo: 40, maxTo: 1000, canRaise: false });
+    game = play(game, { type: "call" });
+    assert(game.history.includes("preflop: B calls 5"));
+    assert.equal(game.street, "done");
+    assert.equal(totalChips(game), 2015);
+  });
+
   test("when nobody can bet any more, the board runs out to a showdown", () => {
     let game = startHand(newGame(["A", "B"], 1000, 20));
     game = play(game, { type: "raise", amount: 1000 }, { type: "call" });
@@ -304,16 +374,18 @@ describe("pots", () => {
     );
   });
 
-  test("a split pot shares the odd chip out by seat order", () => {
+  test("a split pot's odd chip goes to the first winner left of the dealer button", () => {
+    // A has the button and B, on its left, folds the small blind: C is the first winner left of it.
     let game = rigHand(newGame(["A", "B", "C"], 1000, 22), ["2c 3d", "4c 5d", "2d 3c"], "Ah Kh Qh Jh Th");
+    assert.equal(game.dealer, 0);
     game = play(game, { type: "call" }, { type: "fold" });
     game = checkDown(game);
 
     assert.deepEqual(
       game.winners.map((w) => [w.seat, w.amount, w.hand]),
       [
-        [0, 28, "Royal Flush"],
-        [2, 27, "Royal Flush"],
+        [0, 27, "Royal Flush"],
+        [2, 28, "Royal Flush"],
       ],
     );
     for (const winner of game.winners) {
@@ -321,14 +393,30 @@ describe("pots", () => {
     }
     assert.deepEqual(
       game.players.map((p) => p.stack),
-      [1006, 989, 1005],
+      [1005, 989, 1006],
     );
     assert.deepEqual(game.history.slice(-4), [
       "showdown: A shows 2c 3d (Royal Flush)",
       "showdown: C shows 2d 3c (Royal Flush)",
-      "A wins 28 with Royal Flush",
-      "C wins 27 with Royal Flush",
+      "A wins 27 with Royal Flush",
+      "C wins 28 with Royal Flush",
     ]);
+  });
+
+  test("the odd chip follows the button: with it on C, A is the first winner on its left", () => {
+    const seated = newGame(["A", "B", "C"], 1000, 21);
+    seated.dealer = 1; // the button moves on to C when the hand is dealt
+    let game = rigHand(seated, ["2c 3d", "4c 5d", "2d 3c"], "Ah Kh Qh Jh Th");
+    assert.equal(game.dealer, 2);
+    game = play(game, { type: "raise", amount: 50 }, { type: "call" }, { type: "fold" }); // B leaves the big blind of 21 behind
+    game = checkDown(game);
+    assert.deepEqual(
+      game.winners.map((w) => [w.seat, w.amount]),
+      [
+        [0, 61],
+        [2, 60],
+      ],
+    );
   });
 
   test("random play never creates or loses chips and always terminates", () => {
@@ -383,15 +471,15 @@ describe("what each seat sees", () => {
     assert.deepEqual(record.board, ["Ah", "Kh", "Qh", "Jh", "Th"]);
     assert.deepEqual(record.history, game.history);
     assert.deepEqual(record.players, [
-      { name: "A", cards: ["2c", "3d"], delta: 6, stack: 1006 },
+      { name: "A", cards: ["2c", "3d"], delta: 5, stack: 1005 },
       { name: "B", cards: ["4c", "5d"], delta: -11, stack: 989 },
-      { name: "C", cards: ["2d", "3c"], delta: 5, stack: 1005 },
+      { name: "C", cards: ["2d", "3c"], delta: 6, stack: 1006 },
     ]);
     assert.deepEqual(
       record.winners.map((w) => [w.name, w.amount, w.hand]),
       [
-        ["A", 28, "Royal Flush"],
-        ["C", 27, "Royal Flush"],
+        ["A", 27, "Royal Flush"],
+        ["C", 28, "Royal Flush"],
       ],
     );
   });
