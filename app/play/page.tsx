@@ -335,7 +335,7 @@ export default function PlayPage() {
         </button>
       )}
 
-      <section className="flex flex-1 items-center justify-center px-12 pb-60 pt-20 sm:px-24 sm:pb-36">
+      <section className="table-stage">
         <TableView
           game={game}
           me={me}

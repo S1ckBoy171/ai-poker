@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { isShowdown, legal, potTotal, type Action, type Game, type LegalOptions, type Player, type Winner } from "@/lib/poker";
 import { play, unlockAudio, type Sound } from "@/lib/sound";
-import { railPoint, rimFacing, rimPoint, type Point } from "@/lib/table-shape";
+import { DEALER_SPOT, SEAT_SPOTS, SPOT_COUNT, railPoint, rimFacing, rimPoint, seatSpot, spotAngle, type Point } from "@/lib/table-shape";
 import { BrandName, Card, DIMS, Icon, SpadeBadge, netColor, type IconName } from "./ui";
 
 /** A running turn clock, drawn as a shrinking bar under that seat's name. */
@@ -14,46 +14,30 @@ export type LogEntry = { id: number; text: string; say?: string; kind?: "hand" |
 
 const POT: Point = { x: 50, y: 39 }; // where the pot pill sits
 const BOARD_DELAY = [0, 110, 220, 0, 0]; // flop cards land one after another
-const CHIPS_NEAR_YOU = 0.45; // your bet and winnings sit this far out: further and your own big cards hide them
 const DEAL_STEP_MS = 70; // between hole cards as they go round the table
 const DEAL_FLIGHT_MS = 320; // a card's trip from the deck to a seat (matches .deal-fly in globals.css)
 const FLICK_MS = 240; // one flick of the dealer's hand (matches .robot-flick in globals.css)
 const SOUND_GAP_MS = 140; // between sounds for one game update
 
-/** Seats are evenly spaced around the oval: position 0 at the bottom, then clockwise. */
-const seatAngle = (position: number, count: number) => Math.PI / 2 + (position * 2 * Math.PI) / count;
+/** The robot dealer and its chip tray always stand at the top center (see SEAT_SPOTS in lib/table-shape.ts). */
+const DEALER_ANGLE = spotAngle(DEALER_SPOT);
+
+/** A cup holder in the rail between every two spots round the table. */
+const CUP_HOLDER_ANGLES = Array.from({ length: SPOT_COUNT }, (_, spot) => spotAngle(spot + 0.5));
 
 /**
- * Where the robot dealer stands, without moving any seat: top center when that spot is free (an odd number of
- * players); otherwise someone sits there, so the dealer stands in the gap to their left.
- */
-function dealerAngle(count: number): number {
-  const top = (3 * Math.PI) / 2;
-  if (count % 2 === 1) {
-    return top;
-  }
-  const halfGap = Math.PI / count;
-  return top - Math.min(halfGap, Math.PI / 4);
-}
-
-/**
- * The table box on narrow and wide screens (keep in step with .table-box in globals.css): its aspect ratio
- * (width / height); the padded rail's thickness and the gap between the rail and the chip tray, both as a
- * share of the box width. The gap leaves room for the dealer's deck, which lies just inside the rail.
+ * The table box on narrow and wide screens (keep in step with .table-box in globals.css):
+ * - aspect: its width / height;
+ * - rail, trayGap: the padded rail's thickness, and the gap between it and the chip tray (room for the dealer's
+ *   deck), both as a share of the box width;
+ * - betRadius, winningsRadius: how far out from the center chips sit in front of a seat, clear of the name plate
+ *   hanging under its avatar. The plate is a fixed size, so the smaller phone table keeps chips further in.
  */
 const TABLE_SHAPES = {
-  narrow: { aspect: 3 / 4, rail: 0.06, trayGap: 0.045 },
-  wide: { aspect: 2, rail: 0.034, trayGap: 0.022 },
+  narrow: { aspect: 3 / 4, rail: 0.06, trayGap: 0.045, betRadius: 0.4, winningsRadius: 0.45 },
+  wide: { aspect: 2, rail: 0.034, trayGap: 0.022, betRadius: 0.5, winningsRadius: 0.62 },
 };
 const WIDE_TABLE_QUERY = "(min-width: 640px)";
-
-/** A cup holder in the rail between every two seats, except where the dealer stands. */
-function cupHolderAngles(seatCount: number): number[] {
-  const angles = Array.from({ length: seatCount }, (_, position) => seatAngle(position + 0.5, seatCount));
-  const dealer = dealerAngle(seatCount);
-  const angleBetween = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
-  return angles.filter((angle) => angleBetween(angle, dealer) > 0.2);
-}
 
 function subscribeToScreenWidth(listener: () => void) {
   const query = window.matchMedia(WIDE_TABLE_QUERY);
@@ -181,15 +165,14 @@ type TableViewProps = {
 export function TableView({ game, me, labels, colors, reveal, thinking, timer, bubbles, paused, onResume }: TableViewProps) {
   const seatCount = game.players.length;
   const shape = useTableShape();
-  /** Where something for `seat` sits, turning the table so your own seat is at the bottom. */
-  const seatPoint = (seat: number, radius: number, rotation = 0) => {
-    const position = me >= 0 ? (seat - me + seatCount) % seatCount : seat;
-    return rimPoint(seatAngle(position, seatCount) + rotation, radius, shape.aspect);
-  };
-  const dealerSpot = rimPoint(dealerAngle(seatCount), 1, shape.aspect);
+  /** Where something for `seat` sits, `radius` of the way out from the center, turned `rotation` past the seat. */
+  const seatPoint = (seat: number, radius: number, rotation = 0) => rimPoint(spotAngle(seatSpot(seat, me)) + rotation, radius, shape.aspect);
+  const takenSpots = new Set(game.players.map((_, seat) => seatSpot(seat, me)));
+  const openSpots = SEAT_SPOTS.filter((spot) => !takenSpots.has(spot));
+  const dealerSpot = rimPoint(DEALER_ANGLE, 1, shape.aspect);
   const chipTray = {
-    spot: railPoint(dealerAngle(seatCount), shape.rail + shape.trayGap, shape.aspect),
-    facing: rimFacing(dealerAngle(seatCount), shape.aspect),
+    spot: railPoint(DEALER_ANGLE, shape.rail + shape.trayGap, shape.aspect),
+    facing: rimFacing(DEALER_ANGLE, shape.aspect),
   };
   const dealtCards = game.players.reduce((sum, player) => sum + player.cards.length, 0);
   const holeCardsMs = dealtCards ? (dealtCards - 1) * DEAL_STEP_MS + DEAL_FLIGHT_MS : 0;
@@ -207,8 +190,6 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
     return `${who} ${winner.amount.toLocaleString()}${withHand}`;
   };
   const thinkingText = thinking?.secs === undefined ? "thinking" : `thinking ${thinking.secs}s`;
-  /** How far out chips sit for `seat`: closer in for you, since your own big cards cover the edge of your seat. */
-  const chipRadius = (seat: number, usual: number) => (seat === me ? CHIPS_NEAR_YOU : usual);
 
   return (
     <div className="table-box" style={{ "--rail": `${shape.rail * 100}%` } as CSSProperties}>
@@ -222,7 +203,7 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
           </div>
         </div>
       </div>
-      {cupHolderAngles(seatCount).map((angle) => (
+      {CUP_HOLDER_ANGLES.map((angle) => (
         <div key={angle} className="cup-holder" style={place(railPoint(angle, shape.rail / 2, shape.aspect))} aria-hidden />
       ))}
       <ChipTray style={{ ...place(chipTray.spot), rotate: `${chipTray.facing}deg` }} />
@@ -289,19 +270,19 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
       {game.players.map(
         (player, seat) =>
           player.bet > 0 && (
-            <div key={`${game.hand}-${seat}-${player.bet}`} className="fly chips-in z-[5]" style={fly(seatPoint(seat, 0.84), seatPoint(seat, chipRadius(seat, 0.6)))}>
+            <div key={`${game.hand}-${seat}-${player.bet}`} className="fly chips-in z-[5]" style={fly(seatPoint(seat, 0.84), seatPoint(seat, shape.betRadius))}>
               <Chips amount={player.bet} />
             </div>
           ),
       )}
       {game.swept.map((bet) => (
-        <div key={`${game.hand}-${bet.street}-${bet.seat}`} className="fly chips-sweep z-[5]" style={fly(seatPoint(bet.seat, chipRadius(bet.seat, 0.6)), POT)}>
+        <div key={`${game.hand}-${bet.street}-${bet.seat}`} className="fly chips-sweep z-[5]" style={fly(seatPoint(bet.seat, shape.betRadius), POT)}>
           <Chips amount={bet.amount} />
         </div>
       ))}
       {game.street === "done" &&
         game.winners.map((winner) => (
-          <div key={`${game.hand}-won-${winner.seat}`} className="fly chips-win z-[7]" style={fly(POT, seatPoint(winner.seat, chipRadius(winner.seat, 0.78)))}>
+          <div key={`${game.hand}-won-${winner.seat}`} className="fly chips-win z-[7]" style={fly(POT, seatPoint(winner.seat, shape.winningsRadius))}>
             <Chips amount={winner.amount} plus />
           </div>
         ))}
@@ -315,6 +296,9 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
         </div>
       )}
 
+      {openSpots.map((spot) => (
+        <OpenSeat key={spot} style={place(rimPoint(spotAngle(spot), 1, shape.aspect))} />
+      ))}
       {game.players.map((player, seat) => (
         <Seat
           key={seat}
@@ -330,6 +314,7 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
           hand={game.hand}
           dealDelay={(round) => dealDelay(seat, round) + DEAL_FLIGHT_MS}
           timer={timer?.seat === seat && paused == null ? timer : undefined}
+          badgeSide={seatPoint(seat, 1).x < 50 ? "right" : "left"}
           style={place(seatPoint(seat, 1))}
         />
       ))}
@@ -512,16 +497,19 @@ type SeatProps = {
   hand: number;
   dealDelay: (round: number) => number;
   timer?: Timer;
+  badgeSide: "left" | "right"; // the avatar side facing the table's middle
   style: CSSProperties;
 };
 
-function Seat({ player, label, human, color, thinking, won, bubble, faceUp, winningCards, hand, dealDelay, timer, style }: SeatProps) {
+function Seat({ player, label, human, color, thinking, won, bubble, faceUp, winningCards, hand, dealDelay, timer, badgeSide, style }: SeatProps) {
   const sittingOut = !player.cards.length;
   const faded = (player.folded && !won) || sittingOut;
   const badge = thinking ?? player.last;
-  const cardsPosition = human ? "absolute bottom-[40%] left-1/2 flex -translate-x-1/2 gap-0.5" : "absolute left-[62%] top-[-12%] flex -space-x-3";
-  const badgePosition = human ? "right-full top-[55%] mr-9" : "right-[68%] top-0";
+  const showCards = !player.folded && !sittingOut;
+  const cardSpacing = human ? "gap-0.5" : "-space-x-3";
+  const cardsHeight = human ? "h-[70px] sm:h-[84px]" : "h-9"; // kept when the cards are gone, so the name plate stays put
   const badgeColors = thinking ? "bg-cream text-wine" : "bg-gold text-wine";
+  const badgePosition = badgeSide === "left" ? "right-[68%] origin-right" : "left-[68%] origin-left";
   /** Other players' two cards fan out slightly. */
   const cardTilt = (round: number) => {
     if (human) {
@@ -531,8 +519,9 @@ function Seat({ player, label, human, color, thinking, won, bubble, faceUp, winn
   };
 
   return (
+    // `style` puts the avatar's center on the rail; the cards and name plate hang below it.
     <div
-      className={`absolute z-10 flex w-24 -translate-x-1/2 -translate-y-1/2 flex-col items-center transition-opacity duration-300 sm:w-28 ${faded ? "opacity-55" : ""}`}
+      className={`absolute z-10 flex w-24 -translate-x-1/2 -translate-y-6 flex-col items-center transition-opacity duration-300 sm:w-28 sm:-translate-y-8 ${faded ? "opacity-55" : ""}`}
       style={style}
     >
       {bubble && (
@@ -551,29 +540,29 @@ function Seat({ player, label, human, color, thinking, won, bubble, faceUp, winn
         >
           {label.slice(0, 2).toUpperCase()}
         </div>
-        {!player.folded && !sittingOut && (
-          <div className={cardsPosition}>
-            {player.cards.map((card, round) => (
-              <div key={`${hand}-${round}-${faceUp && !!card}`} className={cardTilt(round)}>
-                <Card
-                  card={faceUp ? card : undefined}
-                  size={human ? "lg" : "sm"}
-                  delay={faceUp && !human ? 0 : dealDelay(round)}
-                  win={faceUp && winningCards.has(card)}
-                  dim={faceUp && !!card && winningCards.size > 0 && !winningCards.has(card)}
-                />
-              </div>
-            ))}
-          </div>
-        )}
         {badge && (
           <span
             key={thinking ? "thinking" : badge}
-            className={`anim-pop absolute origin-right whitespace-nowrap ${badgePosition} rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wide shadow ${badgeColors}`}
+            className={`anim-pop absolute top-0 whitespace-nowrap ${badgePosition} rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wide shadow ${badgeColors}`}
           >
             {badge}
           </span>
         )}
+      </div>
+      {/* the two cards overlap the lower part of the avatar, below the initials */}
+      <div className={`relative z-10 -mt-3.5 flex justify-center sm:-mt-5 ${cardsHeight} ${cardSpacing}`}>
+        {showCards &&
+          player.cards.map((card, round) => (
+            <div key={`${hand}-${round}-${faceUp && !!card}`} className={cardTilt(round)}>
+              <Card
+                card={faceUp ? card : undefined}
+                size={human ? "lg" : "sm"}
+                delay={faceUp && !human ? 0 : dealDelay(round)}
+                win={faceUp && winningCards.has(card)}
+                dim={faceUp && !!card && winningCards.size > 0 && !winningCards.has(card)}
+              />
+            </div>
+          ))}
       </div>
       <div className="relative z-10 mt-1 w-full overflow-hidden rounded-lg bg-black/70 px-2 py-0.5 text-center shadow ring-1 ring-gold/30">
         <div className="truncate text-[11px] text-cream/80 sm:text-xs">{label}</div>
@@ -586,6 +575,19 @@ function Seat({ player, label, human, color, thinking, won, bubble, faceUp, winn
           />
         )}
       </div>
+    </div>
+  );
+}
+
+/** A seat spot nobody sits in, so the table always shows its 9 seats. */
+function OpenSeat({ style }: { style: CSSProperties }) {
+  return (
+    <div
+      className="absolute z-[4] grid h-12 w-12 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-dashed border-gold/35 bg-black/30 text-[9px] font-bold uppercase tracking-wider text-cream/50 sm:h-16 sm:w-16 sm:text-[10px]"
+      style={style}
+      aria-hidden
+    >
+      Open
     </div>
   );
 }

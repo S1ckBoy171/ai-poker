@@ -1,7 +1,7 @@
 // Run: npm test
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { railPoint, rimFacing, rimPoint, type Point } from "./table-shape.ts";
+import { DEALER_SPOT, SEAT_SPOTS, SPOT_COUNT, railPoint, rimFacing, rimPoint, seatSpot, spotAngle, type Point } from "./table-shape.ts";
 
 const WIDE = 2; // the desktop table box, width / height
 const TALL = 3 / 4; // the phone table box
@@ -87,5 +87,53 @@ describe("points on the rail", () => {
     assert.ok(Math.abs(rimFacing(RIGHT, WIDE) - 90) < 1e-9);
     assert.ok(Math.abs(rimFacing(BOTTOM, WIDE) - 180) < 1e-9);
     assert.ok(Math.abs(rimFacing(LEFT, TALL) + 90) < 1e-9);
+  });
+});
+
+describe("spots round the table", () => {
+  const SEAT_COUNTS = [2, 3, 4, 5, 6, 7, 8, 9];
+  /** The spots of seats 0 to count - 1, as `viewer` sees the table. */
+  const spotsOf = (count: number, viewer = 0) => Array.from({ length: count }, (_, seat) => seatSpot(seat, viewer));
+  /** Spots next to each other round the table (the dealer's spot counts, so the two beside it aren't neighbors). */
+  const areNeighbors = (a: number, b: number) => Math.abs(a - b) === 1 || Math.abs(a - b) === SPOT_COUNT - 1;
+
+  test("the dealer's spot is the top center", () => {
+    assertNear(rimPoint(spotAngle(DEALER_SPOT), 1, WIDE), { x: 50, y: 0 });
+    assertNear(rimPoint(spotAngle(DEALER_SPOT), 1, TALL), { x: 50, y: 0 });
+  });
+
+  test("everyone sees themselves at the bottom center; a watcher sees seat 0 there", () => {
+    for (let viewer = 0; viewer < SEAT_SPOTS.length; viewer++) {
+      assert.equal(seatSpot(viewer, viewer), 0);
+    }
+    assert.equal(seatSpot(0, -1), 0);
+    assertNear(rimPoint(spotAngle(0), 1, WIDE), { x: 50, y: 100 });
+  });
+
+  test("every seat has its own seat spot, never the dealer's, for every viewer", () => {
+    for (let viewer = -1; viewer < SEAT_SPOTS.length; viewer++) {
+      const spots = spotsOf(SEAT_SPOTS.length, viewer);
+      assert.deepEqual([...spots].sort((a, b) => a - b), SEAT_SPOTS, `viewer ${viewer}: ${spots}`);
+    }
+  });
+
+  test("the table stays spread out as it fills: 5 players sit evenly, 7 symmetrically", () => {
+    assert.deepEqual([...spotsOf(5)].sort((a, b) => a - b), [0, 2, 4, 6, 8]);
+    const seven = spotsOf(7);
+    assert.ok(seven.every((spot) => seven.includes((SPOT_COUNT - spot) % SPOT_COUNT)), `mirror image: ${seven}`);
+    for (const count of [2, 3, 4, 5]) {
+      const spots = spotsOf(count);
+      const crowded = spots.some((a) => spots.some((b) => areNeighbors(a, b)));
+      assert.ok(!crowded, `${count} players should not sit side by side: ${spots}`);
+    }
+  });
+
+  test("a seat's spot never depends on how many players there are, so nobody moves when someone joins", () => {
+    for (let viewer = 0; viewer < SEAT_SPOTS.length; viewer++) {
+      const fullTable = spotsOf(SEAT_SPOTS.length, viewer);
+      for (const count of SEAT_COUNTS) {
+        assert.deepEqual(spotsOf(count, viewer), fullTable.slice(0, count));
+      }
+    }
   });
 });

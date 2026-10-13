@@ -23,18 +23,36 @@ body {
 }
 
 /* ---- table ---- */
+/*
+ * The space round the table on the table pages: room above for the dealer and the top seats' badges, and room
+ * below for your own seat (its cards and name plate hang under your avatar) and, on phones, the action bar.
+ * The table box's height budget below must cover the header, these paddings and the "no API keys" notice
+ * that can sit above the table, so nothing is cut off or hidden behind the action bar.
+ */
+.table-stage {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 3rem 20rem;
+}
+@media (min-width: 640px) {
+  .table-stage {
+    padding: 5rem 6rem 10rem;
+  }
+}
 .table-box {
   --robot-w: 4.5rem; /* the dealer's width; see .robot-dealer */
   --deck-drop: calc(var(--robot-w) * 0.275);
   position: relative;
   aspect-ratio: 3 / 4;
-  width: min(100%, calc((100dvh - 400px) * 0.75));
+  width: min(100%, calc((100dvh - 510px) * 0.75));
 }
 @media (min-width: 640px) {
   .table-box {
     --robot-w: 8.5rem;
     aspect-ratio: 2 / 1;
-    width: min(100%, 1000px, calc((100dvh - 280px) * 2));
+    width: min(100%, 1000px, calc((100dvh - 360px) * 2));
   }
 }
 /* the padded rail: black leather like a real poker table, a thin gold strip where it meets the green felt */
