@@ -3,7 +3,7 @@
 // Background music on/off, with a volume slider that opens when the button is hovered or reached with Tab.
 // Fixed in the top-right corner of every page (the root layout renders it once); headers with their own
 // top-right buttons leave room for it.
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { DEFAULT_MUSIC_LEVEL, setMusicLevel, startMusic, stopMusic } from "@/lib/sound";
 import { Icon } from "./ui";
 
@@ -26,14 +26,17 @@ function readMusicOff(): boolean {
   return musicOff;
 }
 
-/** The saved slider level, 0 to 1, or the default when nothing valid is saved. */
+/**
+ * The saved slider level, above 0 and up to 1, or the default when nothing valid is saved. Zero is never a saved
+ * level: dragging the slider to 0 turns music off instead, so turning it back on returns to an audible level.
+ */
 function readMusicLevel(): number {
   if (musicLevel === null) {
     musicLevel = DEFAULT_MUSIC_LEVEL;
     try {
       const saved = localStorage.getItem(MUSIC_LEVEL_KEY);
       const level = saved === null ? NaN : Number(saved);
-      const isValid = Number.isFinite(level) && level >= 0 && level <= 1;
+      const isValid = Number.isFinite(level) && level > 0 && level <= 1;
       if (isValid) {
         musicLevel = level;
       }
@@ -78,6 +81,12 @@ export function MusicButton() {
     };
   }, [isOff]);
 
+  // The level when the slider was last grabbed (by pointer or keyboard focus); see changeLevel.
+  const levelWhenGrabbed = useRef(level);
+  const rememberLevel = () => {
+    levelWhenGrabbed.current = readMusicLevel();
+  };
+
   // The saved level applies from the first track on.
   useEffect(() => {
     setMusicLevel(level);
@@ -93,13 +102,25 @@ export function MusicButton() {
     announceMusicSettings();
   }
 
+  /** Keep `newLevel` as the level music plays at whenever it is on. */
+  function storeLevel(newLevel: number) {
+    musicLevel = newLevel;
+    save(MUSIC_LEVEL_KEY, String(newLevel));
+  }
+
+  /** The slider and the button are one control: 0 is "off", and anything above it is "on" at that level. */
   function changeLevel(percent: number) {
-    musicLevel = percent / 100;
-    save(MUSIC_LEVEL_KEY, String(musicLevel));
-    setMusicLevel(musicLevel);
-    const wantsToHear = isOff && musicLevel > 0; // turning the volume up means you want to hear it
-    if (wantsToHear) {
-      turnMusic(true); // also tells the controls about the new level
+    if (percent === 0) {
+      // Sliding down to 0 passes through 2%, 1%...: keep the level from before the slide, so turning music back
+      // on returns to it and not to a whisper. Only stored here: the music is fading out, and must not swell first.
+      storeLevel(levelWhenGrabbed.current);
+      turnMusic(false);
+      return;
+    }
+    storeLevel(percent / 100);
+    setMusicLevel(percent / 100); // right away, so the volume follows the thumb
+    if (isOff) {
+      turnMusic(true); // turning the volume up means you want to hear it; this also announces the new level
       return;
     }
     announceMusicSettings();
@@ -108,7 +129,7 @@ export function MusicButton() {
   const toggleMusic = () => turnMusic(isOff);
 
   const label = isOff ? "Turn music on" : "Turn music off";
-  const percent = Math.round(level * 100);
+  const percent = isOff ? 0 : Math.round(level * 100); // off shows as 0; the saved level comes back with the music
   // The slider drops down below the button, clear of the header buttons beside it. Only the music button opens
   // it: until then the wrapper and the slider ignore the pointer, so hovering where the slider would be opens
   // nothing. Once the button is hovered, the whole wrapper takes the pointer, so the slider stays open while the
@@ -132,6 +153,8 @@ export function MusicButton() {
             step={1}
             value={percent}
             aria-valuetext={`${percent}%`}
+            onPointerDown={rememberLevel}
+            onFocus={rememberLevel}
             onChange={(e) => changeLevel(Number(e.target.value))}
             className="w-28 accent-gold"
           />
