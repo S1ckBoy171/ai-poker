@@ -78,6 +78,8 @@ describe("hand values", () => {
   });
 
   test("hand names", () => {
+    assert.equal(handName(value("As Ks Qs Js Ts 9s 2d")), "Royal Flush");
+    assert.equal(handName(value("Ks Qs Js Ts 9s 2d 2c")), "Straight Flush");
     assert.equal(handName(value("Ah 2h 3h 4h 5h Kd Kc")), "Straight Flush");
     assert.equal(handName(value("Th Td Ts 4c 4d")), "Full House");
     assert.equal(handName(value("Kh Kd 4s 4c Ad")), "Two Pair");
@@ -161,7 +163,7 @@ describe("dealing", () => {
 
   test("a late joiner sits out until the next deal", () => {
     let game = startHand(newGame(["a", "b", "c"], 500, 20));
-    game = addPlayer(game, "late", 500);
+    game = addPlayer(game, "late", 500, 3);
     assert.equal(game.players[3].name, "late");
     assert.equal(game.players[3].stack, 500);
     assert.equal(game.players[3].buyIn, 500);
@@ -170,6 +172,31 @@ describe("dealing", () => {
       game = play(game, { type: "fold" });
     }
     assert.equal(startHand(game).players[3].cards.length, 2, "late joiner dealt in next hand");
+  });
+
+  test("a joiner seated between two players: the button, the turn, the bets and the winnings stay with their players", () => {
+    const nameAt = (game: Game, seat: number) => game.players[seat].name;
+    const namesOf = (game: Game, seats: { seat: number }[]) => seats.map(({ seat }) => nameAt(game, seat));
+
+    const midHand = play(startHand(newGame(["a", "b", "c"], 500, 20)), { type: "call" }, { type: "call" }, { type: "check" }); // on the flop
+    const joinedMidHand = addPlayer(midHand, "late", 500, 1);
+    assert.deepEqual(joinedMidHand.players.map((player) => player.name), ["a", "late", "b", "c"]);
+    assert.equal(nameAt(joinedMidHand, joinedMidHand.dealer), nameAt(midHand, midHand.dealer));
+    assert.equal(nameAt(joinedMidHand, joinedMidHand.turn), nameAt(midHand, midHand.turn));
+    assert.deepEqual(namesOf(joinedMidHand, joinedMidHand.swept), namesOf(midHand, midHand.swept));
+    assert.equal(midHand.swept.length, 3, "all three put chips in before the flop");
+
+    // The hand plays on round the newcomer, who is never asked to act.
+    let game = joinedMidHand;
+    while (game.street !== "done") {
+      assert.notEqual(nameAt(game, game.turn), "late");
+      game = play(game, { type: "check" });
+    }
+
+    const handOver = checkDown(startHand(newGame(["a", "b", "c"], 500, 20)));
+    const joinedAfter = addPlayer(handOver, "late", 500, 1);
+    assert.equal(joinedAfter.turn, -1);
+    assert.deepEqual(namesOf(joinedAfter, joinedAfter.winners), namesOf(handOver, handOver.winners));
   });
 });
 
@@ -285,8 +312,8 @@ describe("pots", () => {
     assert.deepEqual(
       game.winners.map((w) => [w.seat, w.amount, w.hand]),
       [
-        [0, 28, "Straight Flush"],
-        [2, 27, "Straight Flush"],
+        [0, 28, "Royal Flush"],
+        [2, 27, "Royal Flush"],
       ],
     );
     for (const winner of game.winners) {
@@ -297,10 +324,10 @@ describe("pots", () => {
       [1006, 989, 1005],
     );
     assert.deepEqual(game.history.slice(-4), [
-      "showdown: A shows 2c 3d (Straight Flush)",
-      "showdown: C shows 2d 3c (Straight Flush)",
-      "A wins 28 with Straight Flush",
-      "C wins 27 with Straight Flush",
+      "showdown: A shows 2c 3d (Royal Flush)",
+      "showdown: C shows 2d 3c (Royal Flush)",
+      "A wins 28 with Royal Flush",
+      "C wins 27 with Royal Flush",
     ]);
   });
 
@@ -363,8 +390,8 @@ describe("what each seat sees", () => {
     assert.deepEqual(
       record.winners.map((w) => [w.name, w.amount, w.hand]),
       [
-        ["A", 28, "Straight Flush"],
-        ["C", 27, "Straight Flush"],
+        ["A", 28, "Royal Flush"],
+        ["C", 27, "Royal Flush"],
       ],
     );
   });

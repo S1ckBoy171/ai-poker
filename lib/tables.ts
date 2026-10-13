@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { prisma } from "./db";
 import type { Prisma } from "./generated/prisma/client";
 import { act, addPlayer, legalize, newGame, playersWithChips, startHand, viewFor, type Action, type Game } from "./poker";
+import { joinSeat } from "./table-shape";
 
 export const TURN_MS = 30_000; // time to act before an automatic check (or fold)
 const NEXT_HAND_MS = 5_000; // everyone sees the result before the next deal
@@ -14,7 +15,7 @@ type Seat = { name: string; token: string };
 type TableData = {
   stack: number;
   bb: number;
-  seats: Seat[]; // index = seat; seat 0 is the host
+  seats: Seat[]; // index = seat, clockwise round the table; seat 0 is the host
   game: Game | null; // null until the host deals
   turnAt: number; // when the current turn started, or the last hand ended (epoch ms)
 };
@@ -163,9 +164,11 @@ export async function joinTable(code: string, token: string, name: unknown) {
     for (let suffix = 2; taken.has(seatName); suffix++) {
       seatName = `${wanted} ${suffix}`;
     }
-    current.seats.push({ name: seatName, token: newToken });
+    // Seat numbers run clockwise, the order of play, so a chair between two players means a seat number between theirs.
+    const seat = joinSeat(current.seats.length);
+    current.seats.splice(seat, 0, { name: seatName, token: newToken });
     if (current.game) {
-      current.game = addPlayer(current.game, seatName, current.stack); // plays from the next hand
+      current.game = addPlayer(current.game, seatName, current.stack, seat); // plays from the next hand
     }
     return true;
   });

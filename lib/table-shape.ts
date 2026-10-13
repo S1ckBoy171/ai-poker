@@ -90,18 +90,35 @@ export const SEAT_SPOTS = [0, 1, 2, 3, 4, 6, 7, 8, 9];
 export const spotAngle = (spot: number) => Math.PI / 2 + (spot * 2 * Math.PI) / SPOT_COUNT;
 
 /**
- * The order the 9 seat spots fill as players sit down, as indexes into SEAT_SPOTS. Each seat keeps its spot for
- * good, so nobody moves when someone joins a running table, and every early arrival lands well apart from the
- * others: 5 players sit evenly, 7 in a mirror image.
+ * The chair each arrival takes, as indexes into SEAT_SPOTS: the first player gets chair 0, the second chair 5...
+ * A chair is for good, so nobody moves when someone joins a running table, and every early arrival lands well
+ * apart from the others: 5 players sit evenly, 7 in a mirror image.
  */
 const FILL_ORDER = [0, 5, 2, 7, 4, 3, 6, 1, 8];
 
 /**
- * The spot where `seat` sits as `viewer` sees the table: the table is turned so the viewer's own seat is at the
- * bottom center, keeping the dealer at the top. A viewer of -1 is only watching and sees seat 0 at the bottom.
+ * The chairs taken at a table of `playerCount`, clockwise. Seats are numbered the same way, so seat 1 sits on
+ * seat 0's left and play, which goes up the seat numbers, runs clockwise as in real poker.
  */
-export function seatSpot(seat: number, viewer: number): number {
+const takenChairs = (playerCount: number) => FILL_ORDER.slice(0, playerCount).sort((a, b) => a - b);
+
+/** The chair of `seat` at a table of `playerCount`. A player keeps it while their seat number changes (see joinSeat). */
+export const seatChair = (seat: number, playerCount: number) => takenChairs(playerCount)[seat];
+
+/**
+ * The seat number a new player gets at a table of `playerCount`: their chair's place in the clockwise order.
+ * Players from that seat on go up one seat number; everybody stays in their chair.
+ */
+export const joinSeat = (playerCount: number) => takenChairs(playerCount + 1).indexOf(FILL_ORDER[playerCount]);
+
+/**
+ * The spot where `seat` sits at a table of `playerCount`, as `viewer` sees it: the table is turned so the viewer's
+ * own seat is at the bottom center, keeping the dealer at the top. A viewer of -1 is only watching and sees seat 0
+ * at the bottom.
+ */
+export function seatSpot(seat: number, viewer: number, playerCount: number): number {
+  const chairs = takenChairs(playerCount);
   const bottomSeat = viewer >= 0 ? viewer : 0;
-  const turned = FILL_ORDER[seat] - FILL_ORDER[bottomSeat] + SEAT_SPOTS.length;
+  const turned = chairs[seat] - chairs[bottomSeat] + SEAT_SPOTS.length;
   return SEAT_SPOTS[turned % SEAT_SPOTS.length];
 }

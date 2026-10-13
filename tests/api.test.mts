@@ -708,8 +708,11 @@ describe("friend tables", () => {
     assert.equal(full.body.error, "This table is full.");
 
     const view = (await readTable(code, tokens[0])).body;
-    assert.deepEqual(view.names, ["Ana", "Ben", "Ana 2", "C", "D", "E", "F", "G", "H"]);
-    assert(view.game?.players.slice(2).every((player) => player.cards.length === 0));
+    // Seats run clockwise and each newcomer takes a chair well apart from the others, so they sit between earlier players.
+    assert.deepEqual(view.names, ["Ana", "G", "Ana 2", "E", "D", "Ben", "F", "C", "H"]);
+    const lateJoiners = view.game?.players.filter((player) => player.name !== "Ana" && player.name !== "Ben");
+    assert.equal(lateJoiners?.length, 7);
+    assert(lateJoiners?.every((player) => player.cards.length === 0));
   });
 
   test("rebuys: only once you're out of chips", async () => {

@@ -1,7 +1,7 @@
 // Run: npm test
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { DEALER_SPOT, SEAT_SPOTS, SPOT_COUNT, railPoint, rimFacing, rimPoint, seatSpot, spotAngle, type Point } from "./table-shape.ts";
+import { DEALER_SPOT, SEAT_SPOTS, SPOT_COUNT, joinSeat, railPoint, rimFacing, rimPoint, seatChair, seatSpot, spotAngle, type Point } from "./table-shape.ts";
 
 const WIDE = 2; // the desktop table box, width / height
 const TALL = 3 / 4; // the phone table box
@@ -93,7 +93,7 @@ describe("points on the rail", () => {
 describe("spots round the table", () => {
   const SEAT_COUNTS = [2, 3, 4, 5, 6, 7, 8, 9];
   /** The spots of seats 0 to count - 1, as `viewer` sees the table. */
-  const spotsOf = (count: number, viewer = 0) => Array.from({ length: count }, (_, seat) => seatSpot(seat, viewer));
+  const spotsOf = (count: number, viewer = 0) => Array.from({ length: count }, (_, seat) => seatSpot(seat, viewer, count));
   /** Spots next to each other round the table (the dealer's spot counts, so the two beside it aren't neighbors). */
   const areNeighbors = (a: number, b: number) => Math.abs(a - b) === 1 || Math.abs(a - b) === SPOT_COUNT - 1;
 
@@ -102,18 +102,38 @@ describe("spots round the table", () => {
     assertNear(rimPoint(spotAngle(DEALER_SPOT), 1, TALL), { x: 50, y: 0 });
   });
 
-  test("everyone sees themselves at the bottom center; a watcher sees seat 0 there", () => {
-    for (let viewer = 0; viewer < SEAT_SPOTS.length; viewer++) {
-      assert.equal(seatSpot(viewer, viewer), 0);
-    }
-    assert.equal(seatSpot(0, -1), 0);
+  test("spots go clockwise from the bottom center: the next one is down on the left", () => {
     assertNear(rimPoint(spotAngle(0), 1, WIDE), { x: 50, y: 100 });
+    const next = rimPoint(spotAngle(1), 1, WIDE);
+    assert.ok(next.x < 50 && next.y > 50, `(${next.x}, ${next.y}) should be bottom left`);
+  });
+
+  test("everyone sees themselves at the bottom center; a watcher sees seat 0 there", () => {
+    for (const count of SEAT_COUNTS) {
+      for (let viewer = 0; viewer < count; viewer++) {
+        assert.equal(seatSpot(viewer, viewer, count), 0);
+      }
+      assert.equal(seatSpot(0, -1, count), 0);
+    }
   });
 
   test("every seat has its own seat spot, never the dealer's, for every viewer", () => {
     for (let viewer = -1; viewer < SEAT_SPOTS.length; viewer++) {
       const spots = spotsOf(SEAT_SPOTS.length, viewer);
       assert.deepEqual([...spots].sort((a, b) => a - b), SEAT_SPOTS, `viewer ${viewer}: ${spots}`);
+    }
+  });
+
+  test("play runs clockwise: the turn goes up the seat numbers, and each seat sits further round than the one before", () => {
+    for (const count of SEAT_COUNTS) {
+      for (let viewer = -1; viewer < count; viewer++) {
+        const bottomSeat = Math.max(viewer, 0);
+        const spots = spotsOf(count, viewer);
+        // The order of play, starting with the seat at the bottom.
+        const inTurnOrder = spots.map((_, turn) => spots[(bottomSeat + turn) % count]);
+        const clockwise = inTurnOrder.every((spot, turn) => turn === 0 || spot > inTurnOrder[turn - 1]);
+        assert.ok(clockwise, `${count} players, viewer ${viewer}: ${inTurnOrder.join(" -> ")}`);
+      }
     }
   });
 
@@ -128,11 +148,21 @@ describe("spots round the table", () => {
     }
   });
 
-  test("a seat's spot never depends on how many players there are, so nobody moves when someone joins", () => {
-    for (let viewer = 0; viewer < SEAT_SPOTS.length; viewer++) {
-      const fullTable = spotsOf(SEAT_SPOTS.length, viewer);
-      for (const count of SEAT_COUNTS) {
-        assert.deepEqual(spotsOf(count, viewer), fullTable.slice(0, count));
+  test("nobody moves when someone joins: the newcomer gets a seat number, the others keep their spots and colors", () => {
+    for (let count = 1; count < SEAT_SPOTS.length; count++) {
+      const newSeat = joinSeat(count);
+      assert.ok(newSeat >= 1 && newSeat <= count, `the host keeps seat 0: ${newSeat}`);
+      const seatAfterJoin = (seat: number) => (seat >= newSeat ? seat + 1 : seat);
+
+      for (let viewer = 0; viewer < count; viewer++) {
+        const before = spotsOf(count, viewer);
+        const after = spotsOf(count + 1, seatAfterJoin(viewer));
+        const newcomerSpot = after[newSeat];
+        assert.deepEqual(after.toSpliced(newSeat, 1), before, `${count} players, viewer ${viewer}`);
+        assert.ok(!before.includes(newcomerSpot), "the newcomer takes an open spot");
+      }
+      for (let seat = 0; seat < count; seat++) {
+        assert.equal(seatChair(seatAfterJoin(seat), count + 1), seatChair(seat, count));
       }
     }
   });

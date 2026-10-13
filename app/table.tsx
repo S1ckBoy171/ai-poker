@@ -166,8 +166,9 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
   const seatCount = game.players.length;
   const shape = useTableShape();
   /** Where something for `seat` sits, `radius` of the way out from the center, turned `rotation` past the seat. */
-  const seatPoint = (seat: number, radius: number, rotation = 0) => rimPoint(spotAngle(seatSpot(seat, me)) + rotation, radius, shape.aspect);
-  const takenSpots = new Set(game.players.map((_, seat) => seatSpot(seat, me)));
+  const spotOf = (seat: number) => seatSpot(seat, me, seatCount);
+  const seatPoint = (seat: number, radius: number, rotation = 0) => rimPoint(spotAngle(spotOf(seat)) + rotation, radius, shape.aspect);
+  const takenSpots = new Set(game.players.map((_, seat) => spotOf(seat)));
   const openSpots = SEAT_SPOTS.filter((spot) => !takenSpots.has(spot));
   const dealerSpot = rimPoint(DEALER_ANGLE, 1, shape.aspect);
   const chipTray = {
