@@ -556,6 +556,7 @@ describe("friend tables", () => {
   const join = (code: string, name: string, token = "") => postTable<Joined>(code, token, { op: "join", name });
   const deal = (code: string, token: string) => postTable<Acted>(code, token, { op: "deal" });
   const act = (code: string, token: string, action: object) => postTable<Acted>(code, token, { op: "act", action });
+  const stand = (code: string, token: string) => postTable<ErrorBody & { ok: boolean }>(code, token, { op: "stand" });
 
   /** A dealt heads-up table: Ana hosts in seat 0, Ben sits in seat 1. */
   async function headsUpTable(stack = 500) {
@@ -585,6 +586,30 @@ describe("friend tables", () => {
     const clampedView = (await readTable(clamped.body.code, clamped.body.token)).body;
     assert.equal(clampedView.bb, 2);
     assert.equal(clampedView.stack, 20, "at least ten big blinds");
+  });
+
+  test("standing up: out of a hand you leave at once; in a hand you fold now if it is your turn and leave when it ends", async () => {
+    const lobby = (await createTable({ name: "Ana" })).body;
+    const benInLobby = (await join(lobby.code, "Ben")).body.token;
+    assert.equal((await stand(lobby.code, benInLobby)).status, 200);
+    assert.deepEqual((await readTable(lobby.code, lobby.token)).body.names, ["Ana"]);
+    assert.equal((await stand(lobby.code, benInLobby)).status, 403, "gone: the old token holds no seat");
+
+    // Heads-up, Ana is on the button and posts the small blind, so she acts first preflop.
+    const { code, tokens, view } = await headsUpTable();
+    assert.equal(view.game?.turn, 0);
+    assert.equal((await stand(code, tokens[1])).status, 200, "Ben stands while it's Ana's turn");
+    const stillSeated = (await readTable(code, tokens[0])).body;
+    assert.deepEqual(stillSeated.names, ["Ana", "Ben"], "Ben stays until the hand is over");
+    const benActs = await act(code, tokens[1], { type: "call" });
+    assert.equal(benActs.status, 409);
+    assert.equal(benActs.body.error, "You've stood up from this table.");
+
+    await act(code, tokens[0], { type: "call" }); // Ben's turn now: he folds at once and leaves
+    const after = (await readTable(code, tokens[0])).body;
+    assert.deepEqual(after.names, ["Ana"]);
+    assert.equal(after.game?.players.length, 1);
+    assert.equal(after.game?.street, "done");
   });
 
   test("host, visitors and joining", async () => {

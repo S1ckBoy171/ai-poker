@@ -70,7 +70,8 @@ export async function playStrictTurn(input: StrictTurnInput): Promise<StrictTurn
       break;
     }
 
-    const callSignal = AbortSignal.any([input.signal, AbortSignal.timeout(timeLeft)]);
+    const endOfTurn = deadlineSignal(timeLeft);
+    const callSignal = AbortSignal.any([input.signal, endOfTurn.signal]);
     let answer: string;
     try {
       answer = await input.ask({ agent: input.agent, key: input.key, system: input.prompt, messages, schema, signal: callSignal });
@@ -95,6 +96,8 @@ export async function playStrictTurn(input: StrictTurnInput): Promise<StrictTurn
       }
       await sleep(Math.min(input.retryDelayMs ?? RETRY_DELAY_MS, deadline - Date.now()));
       continue;
+    } finally {
+      endOfTurn.clear();
     }
 
     const verdict = checkAnswer(options, answer);
@@ -111,6 +114,16 @@ export async function playStrictTurn(input: StrictTurnInput): Promise<StrictTurn
     return finish("call limit", fallback, `Stopped after ${MAX_CALLS_PER_TURN} attempts: ${fallback.type}.`);
   }
   return finish("out of time", fallback, `Out of time after ${attempts.length} attempts: ${fallback.type}.`);
+}
+
+/**
+ * A signal that aborts after `ms`. Unlike AbortSignal.timeout, its timer keeps the process alive, so the turn still
+ * ends on time when nothing else is running (a background worker between hands, or the tests).
+ */
+function deadlineSignal(ms: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException("The turn ran out of time.", "TimeoutError")), ms);
+  return { signal: controller.signal, clear: () => clearTimeout(timer) };
 }
 
 /** Continue the conversation with the model's rejected answer and what was wrong with it. */

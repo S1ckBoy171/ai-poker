@@ -14,6 +14,7 @@ import {
   legalize,
   newGame,
   parseReply,
+  removePlayer,
   startHand,
   system,
   viewFor,
@@ -172,6 +173,24 @@ describe("dealing", () => {
       game = play(game, { type: "fold" });
     }
     assert.equal(startHand(game).players[3].cards.length, 2, "late joiner dealt in next hand");
+  });
+
+  test("a player who stands up between hands leaves; the button passes on to the next player as usual", () => {
+    const nameAt = (game: Game, seat: number) => game.players[seat].name;
+    const handOver = checkDown(startHand(newGame(["a", "b", "c", "d"], 500, 20)));
+    const buttonName = nameAt(handOver, handOver.dealer); // "a" after the first deal
+    const afterButton = nameAt(handOver, (handOver.dealer + 1) % 4);
+
+    const withoutButton = removePlayer(handOver, handOver.dealer);
+    assert.equal(withoutButton.players.length, 3);
+    assert(!withoutButton.players.some((player) => player.name === buttonName));
+    assert.equal(withoutButton.turn, -1);
+    assert.equal(nameAt(startHand(withoutButton), startHand(withoutButton).dealer), afterButton, "the button goes to whoever sat after the leaver");
+
+    const leaverAfterButton = removePlayer(handOver, 3);
+    assert.equal(nameAt(leaverAfterButton, leaverAfterButton.dealer), buttonName, "the button stays with its player");
+
+    assert.throws(() => removePlayer(startHand(handOver), 1), /between hands/);
   });
 
   test("a joiner seated between two players: the button, the turn, the bets and the winnings stay with their players", () => {
