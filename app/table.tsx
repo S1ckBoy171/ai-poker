@@ -71,8 +71,17 @@ function flyFromDeck(dealerSpot: Point, to: Point, delay: number) {
 
 /** Style for a `.fly` element: slides from one table point to another, resting at `to`. */
 function fly(from: Point, to: Point) {
-  return { ...place(to), "--fx": `${from.x}%`, "--fy": `${from.y}%`, "--tx": `${to.x}%`, "--ty": `${to.y}%` } as CSSProperties;
+  return {
+    ...place(to),
+    "--fx": `${from.x}%`,
+    "--fy": `${from.y}%`,
+    "--tx": `${to.x}%`,
+    "--ty": `${to.y}%`,
+  } as CSSProperties;
 }
+
+/** A face-up card is dimmed when there are winning cards and it isn't one of them. */
+const isDimmed = (card: string, winningCards: Set<string>) => winningCards.size > 0 && !winningCards.has(card);
 
 export const clampTo = (options: LegalOptions, amount: number) => Math.min(options.maxTo, Math.max(options.minTo, amount));
 
@@ -167,7 +176,10 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
   const winningSeats = new Set(game.winners.map((winner) => winner.seat));
   const winningCards = new Set(game.winners.flatMap((winner) => winner.cards));
   // Hole cards go out one at a time starting left of the button, twice around.
-  const dealDelay = (seat: number, round: number) => (round * seatCount + ((seat - game.dealer - 1 + seatCount) % seatCount)) * DEAL_STEP_MS;
+  const dealDelay = (seat: number, round: number) => {
+    const seatsPastButton = (seat - game.dealer - 1 + seatCount) % seatCount;
+    return (round * seatCount + seatsPastButton) * DEAL_STEP_MS;
+  };
   const winnerLine = (winner: Winner) => {
     const who = winner.seat === me ? "You win" : `${labels[winner.seat]} wins`;
     const withHand = winner.hand ? ` · ${winner.hand}` : "";
@@ -220,7 +232,7 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
                 size="md"
                 delay={BOARD_DELAY[k]}
                 win={winningCards.has(card)}
-                dim={winningCards.size > 0 && !winningCards.has(card)}
+                dim={isDimmed(card, winningCards)}
               />
             );
           })}
@@ -283,25 +295,28 @@ export function TableView({ game, me, labels, colors, reveal, thinking, timer, b
       {openSpots.map((spot) => (
         <OpenSeat key={spot} style={place(rimPoint(spotAngle(spot), 1, shape.aspect))} />
       ))}
-      {game.players.map((player, seat) => (
-        <Seat
-          key={seat}
-          player={player}
-          label={labels[seat]}
-          human={seat === me}
-          color={colors[seat]}
-          thinking={thinking?.seat === seat && paused == null ? thinkingText : undefined}
-          won={winningSeats.has(seat)}
-          bubble={bubbles?.get(seat)}
-          faceUp={seat === me || !!reveal || (showdown && !player.folded)}
-          winningCards={winningCards}
-          hand={game.hand}
-          dealDelay={(round) => dealDelay(seat, round) + DEAL_FLIGHT_MS}
-          timer={timer?.seat === seat && paused == null ? timer : undefined}
-          badgeSide={seatPoint(seat, 1).x < 50 ? "right" : "left"}
-          style={place(seatPoint(seat, 1))}
-        />
-      ))}
+      {game.players.map((player, seat) => {
+        const avatarPoint = seatPoint(seat, 1);
+        return (
+          <Seat
+            key={seat}
+            player={player}
+            label={labels[seat]}
+            human={seat === me}
+            color={colors[seat]}
+            thinking={thinking?.seat === seat && paused == null ? thinkingText : undefined}
+            won={winningSeats.has(seat)}
+            bubble={bubbles?.get(seat)}
+            faceUp={seat === me || !!reveal || (showdown && !player.folded)}
+            winningCards={winningCards}
+            hand={game.hand}
+            dealDelay={(round) => dealDelay(seat, round) + DEAL_FLIGHT_MS}
+            timer={timer?.seat === seat && paused == null ? timer : undefined}
+            badgeSide={avatarPoint.x < 50 ? "right" : "left"}
+            style={place(avatarPoint)}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -494,6 +509,7 @@ function Seat({ player, label, human, color, thinking, won, bubble, faceUp, winn
   const cardsHeight = human ? "h-[70px] sm:h-[84px]" : "h-9"; // kept when the cards are gone, so the name plate stays put
   const badgeColors = thinking ? "bg-cream text-wine" : "bg-gold text-wine";
   const badgePosition = badgeSide === "left" ? "right-[68%] origin-right" : "left-[68%] origin-left";
+  const stackText = sittingOut && !player.stack ? "BUSTED" : player.stack.toLocaleString();
   /** Other players' two cards fan out slightly. */
   const cardTilt = (round: number) => {
     if (human) {
@@ -543,14 +559,14 @@ function Seat({ player, label, human, color, thinking, won, bubble, faceUp, winn
                 size={human ? "lg" : "sm"}
                 delay={faceUp && !human ? 0 : dealDelay(round)}
                 win={faceUp && winningCards.has(card)}
-                dim={faceUp && !!card && winningCards.size > 0 && !winningCards.has(card)}
+                dim={faceUp && !!card && isDimmed(card, winningCards)}
               />
             </div>
           ))}
       </div>
       <div className="relative z-10 mt-1 w-full overflow-hidden rounded-lg bg-black/70 px-2 py-0.5 text-center shadow ring-1 ring-gold/30">
         <div className="truncate text-[11px] text-cream/80 sm:text-xs">{label}</div>
-        <div className="font-display text-sm text-gold sm:text-base">{sittingOut && !player.stack ? "BUSTED" : player.stack.toLocaleString()}</div>
+        <div className="font-display text-sm text-gold sm:text-base">{stackText}</div>
         {timer && (
           <div
             key={timer.id}
@@ -610,6 +626,7 @@ export function ActionBar({ game, deadline, onAct, onTick, hotkeys = true }: Act
     ["Max", options.maxTo],
   ];
   const secondsLeft = now ? Math.ceil(Math.max(0, deadline - now) / 1000) : null;
+  const hurry = secondsLeft !== null && secondsLeft <= 5;
   const callOrCheck: Action = { type: options.owe ? "call" : "check" };
   const raise: Action = { type: "raise", amount: raiseTo };
 
@@ -643,7 +660,13 @@ export function ActionBar({ game, deadline, onAct, onTick, hotkeys = true }: Act
     const clock = setInterval(() => setNow(Date.now()), 250);
     const msLeft = deadline - Date.now();
     // a tick for each of the last five seconds
-    const warnings = [5, 4, 3, 2, 1].filter((seconds) => msLeft > seconds * 1000).map((seconds) => setTimeout(() => tick(), msLeft - seconds * 1000));
+    const warnings: ReturnType<typeof setTimeout>[] = [];
+    for (const seconds of [5, 4, 3, 2, 1]) {
+      const msUntilWarning = msLeft - seconds * 1000;
+      if (msUntilWarning > 0) {
+        warnings.push(setTimeout(() => tick(), msUntilWarning));
+      }
+    }
     return () => {
       clearInterval(clock);
       warnings.forEach(clearTimeout);
@@ -682,7 +705,7 @@ export function ActionBar({ game, deadline, onAct, onTick, hotkeys = true }: Act
       )}
       <div className="anim-rise flex items-end gap-4 sm:gap-6">
         <div className="mb-2 flex min-w-10 flex-col items-center" aria-hidden>
-          <span className={`font-display text-2xl tabular-nums transition-colors ${secondsLeft !== null && secondsLeft <= 5 ? "text-red-300" : "text-cream"}`}>
+          <span className={`font-display text-2xl tabular-nums transition-colors ${hurry ? "text-red-300" : "text-cream"}`}>
             {secondsLeft ?? ""}s
           </span>
           <span className="text-[10px] uppercase tracking-wider text-cream/50">to act</span>
@@ -720,7 +743,8 @@ export function StatsPanel({ game, labels }: { game: Game; labels: string[] }) {
     const inPot = game.street === "done" ? 0 : player.committed;
     return player.stack + inPot - player.buyIn;
   };
-  const rows = game.players.map((player, seat) => ({ player, seat, net: netOf(player) })).toSorted((a, b) => b.net - a.net);
+  const unsorted = game.players.map((player, seat) => ({ player, seat, net: netOf(player) }));
+  const rows = unsorted.toSorted((a, b) => b.net - a.net);
 
   return (
     <aside

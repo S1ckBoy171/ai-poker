@@ -94,19 +94,25 @@ export function normalize(raw: unknown): Config {
   const fields = raw && typeof raw === "object" ? raw : {};
   // Typed as a Config only so each field can be read; every value is still checked below.
   const merged = { ...DEFAULTS, ...fields } as Config;
-  const bb = Math.max(2, Math.round(Number(merged.bb)) || DEFAULTS.bb);
+  const bb = Math.max(2, wholeNumber(merged.bb, DEFAULTS.bb));
+  const seats = Math.min(MAX_SEATS, Math.max(MIN_SEATS, wholeNumber(merged.seats, DEFAULTS.seats)));
   const savedAgents = Array.isArray(merged.agents) ? merged.agents : [];
   return {
-    seats: Math.min(MAX_SEATS, Math.max(MIN_SEATS, Math.round(Number(merged.seats)) || DEFAULTS.seats)),
+    seats,
     speed: merged.speed === "fast" ? "fast" : "normal",
     bb,
-    stack: Math.max(bb, Math.round(Number(merged.stack)) || DEFAULTS.stack),
+    stack: Math.max(bb, wholeNumber(merged.stack, DEFAULTS.stack)),
     rebuy: Boolean(merged.rebuy),
     topOff: Boolean(merged.topOff),
     playing: Boolean(merged.playing),
     reveal: Boolean(merged.reveal),
     agents: DEFAULTS.agents.map((fallback, seat) => normalizeAgent(savedAgents[seat], fallback)),
   };
+}
+
+/** `value` rounded to a whole number, or `fallback` when that is 0 or not a number. */
+function wholeNumber(value: unknown, fallback: number): number {
+  return Math.round(Number(value)) || fallback;
 }
 
 function normalizeAgent(saved: Agent | undefined, fallback: Agent): Agent {

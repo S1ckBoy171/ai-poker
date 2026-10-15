@@ -187,7 +187,12 @@ export function rejectionMessage(reason: string, options: TurnOptions): string {
 /** Everything the agent is told on its turn: the table, that it is its turn, its options and the answer format. */
 export function briefing(game: Game): string {
   const options = turnOptions(game);
-  return [...tableLines(game), "It is your turn to act now.", `Your options: ${optionsText(options)}.`, answerFormatText(options)].join("\n");
+  return [
+    ...tableLines(game),
+    "It is your turn to act now.",
+    `Your options: ${optionsText(options)}.`,
+    answerFormatText(options),
+  ].join("\n");
 }
 
 function answerFormatText(options: TurnOptions): string {

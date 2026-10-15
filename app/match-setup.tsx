@@ -43,6 +43,9 @@ function catalogOf(rows: KeyRow[]): Catalog {
 /** What a bot's check is valid for: changing any of these makes it unchecked again. */
 const checkSignature = (bot: Bot) => [bot.provider, bot.model.trim(), bot.effort].join("|");
 
+/** The bot's check, if it was run for what the bot is set to now; otherwise idle. */
+const currentCheck = (bot: Bot): Status => (bot.check.for === checkSignature(bot) ? bot.check : IDLE);
+
 export function MatchSetup() {
   const [opponents, setOpponents] = useState<Opponents>("you");
   return (
@@ -88,8 +91,9 @@ function PlayAgainstBots() {
   /** Check a key with its provider and load the models it can use. An empty key checks the saved one. */
   const checkKey = async (provider: Provider, key: string) => {
     // the row may change while the check runs: only a row still holding this provider and key takes the result
+    const isCheckedRow = (row: KeyRow) => row.provider === provider && row.key === key;
     const updateCheckedRow = (patch: Partial<KeyRow>) => {
-      setRows((current) => current.map((row) => (row.provider === provider && row.key === key ? { ...row, ...patch } : row)));
+      setRows((current) => current.map((row) => (isCheckedRow(row) ? { ...row, ...patch } : row)));
     };
     const { label } = PROVIDERS[provider];
     updateCheckedRow({ status: { kind: "busy", text: `Checking the key with ${label}…` }, models: null });
@@ -150,6 +154,8 @@ function PlayAgainstBots() {
     }
   };
   const removeRow = (index: number) => setRows(rows.filter((_, i) => i !== index));
+  /** The providers of every key row except this one: each provider can only have one row. */
+  const otherRowsProviders = (index: number) => rows.filter((_, i) => i !== index).map((other) => other.provider);
 
   /** Edit the bot as it shows now (fitted to the keys that work), so the edit keeps everything else the user sees. */
   const updateBot = (index: number, patch: Partial<Bot>) => {
@@ -163,7 +169,8 @@ function PlayAgainstBots() {
     const signature = checkSignature(bot);
     const typedKey = rows.find((row) => row.provider === bot.provider)?.key.trim() ?? "";
     const setCheck = (check: Status) => {
-      setBots((current) => current.map((stored, i) => (i === index ? { ...stored, check: { ...check, for: signature } } : stored)));
+      const signedCheck = { ...check, for: signature };
+      setBots((current) => current.map((stored, i) => (i === index ? { ...stored, check: signedCheck } : stored)));
     };
     setCheck({ kind: "busy", text: `Asking ${model} for a test reply…` });
     try {
@@ -247,7 +254,7 @@ function PlayAgainstBots() {
                 key={index}
                 row={row}
                 hint={hints[row.provider]}
-                takenProviders={rows.filter((_, i) => i !== index).map((other) => other.provider)}
+                takenProviders={otherRowsProviders(index)}
                 removable={rows.length > 1}
                 onProvider={(provider) => changeRowProvider(index, provider)}
                 onKey={(key) => changeRowKey(index, key)}
@@ -282,7 +289,7 @@ function PlayAgainstBots() {
                 seat={index + 2}
                 bot={bot}
                 catalog={catalog}
-                check={bot.check.for === checkSignature(bot) ? bot.check : IDLE}
+                check={currentCheck(bot)}
                 onChange={(patch) => updateBot(index, patch)}
                 onCheck={() => checkBot(index)}
               />

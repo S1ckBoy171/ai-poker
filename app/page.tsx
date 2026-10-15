@@ -39,7 +39,8 @@ export default function Home() {
     });
     const reply = await res.json().catch(() => ({}));
     if (!res.ok) {
-      return setFriendError(reply.error ?? "Could not create the table.");
+      setFriendError(reply.error ?? "Could not create the table.");
+      return;
     }
     try {
       localStorage.setItem(`agent-holdem-table:${reply.code}`, reply.token); // your seat's secret, kept in this browser (the table page reads it)

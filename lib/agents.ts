@@ -79,34 +79,53 @@ async function askClaude({ agent, key, system, messages, schema, signal }: Model
   if (response.stop_reason === "refusal") {
     throw Object.assign(new Error("model declined to answer"), { refused: true });
   }
-  return response.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
+  let text = "";
+  for (const block of response.content) {
+    if (block.type === "text") {
+      text += block.text;
+    }
+  }
+  return text;
 }
 
 type OpenAIResponse = { output: { type: string; content?: { type: string; text?: string }[] }[] };
 
 async function askOpenAI({ agent, key, system, messages, schema, signal }: ModelRequest) {
-  const response = await postJson<OpenAIResponse>("https://api.openai.com/v1/responses", key, signal, {
-    model: agent.model,
-    instructions: system,
-    input: messages,
-    ...(agent.effort !== "default" && { reasoning: { effort: agent.effort } }),
-    ...(schema && { text: { format: { type: "json_schema", name: SCHEMA_NAME, schema, strict: true } } }),
-  });
-  return response.output
-    .flatMap((item) => (item.type === "message" ? (item.content ?? []) : []))
-    .map((part) => (part.type === "output_text" ? part.text : ""))
-    .join("");
+  const body: Record<string, unknown> = { model: agent.model, instructions: system, input: messages };
+  if (agent.effort !== "default") {
+    body.reasoning = { effort: agent.effort };
+  }
+  if (schema) {
+    body.text = { format: { type: "json_schema", name: SCHEMA_NAME, schema, strict: true } };
+  }
+
+  const response = await postJson<OpenAIResponse>("https://api.openai.com/v1/responses", key, signal, body);
+  let text = "";
+  for (const item of response.output) {
+    if (item.type !== "message") {
+      continue;
+    }
+    for (const part of item.content ?? []) {
+      if (part.type === "output_text") {
+        text += part.text ?? "";
+      }
+    }
+  }
+  return text;
 }
 
 type OpenRouterResponse = { choices?: { message?: { content?: unknown } }[] };
 
 async function askOpenRouter({ agent, key, system, messages, schema, signal }: ModelRequest) {
-  const response = await postJson<OpenRouterResponse>("https://openrouter.ai/api/v1/chat/completions", key, signal, {
-    model: agent.model,
-    messages: [{ role: "system", content: system }, ...messages],
-    ...(agent.effort !== "default" && { reasoning: { effort: agent.effort } }),
-    ...(schema && { response_format: { type: "json_schema", json_schema: { name: SCHEMA_NAME, strict: true, schema } } }),
-  });
+  const body: Record<string, unknown> = { model: agent.model, messages: [{ role: "system", content: system }, ...messages] };
+  if (agent.effort !== "default") {
+    body.reasoning = { effort: agent.effort };
+  }
+  if (schema) {
+    body.response_format = { type: "json_schema", json_schema: { name: SCHEMA_NAME, strict: true, schema } };
+  }
+
+  const response = await postJson<OpenRouterResponse>("https://openrouter.ai/api/v1/chat/completions", key, signal, body);
   return String(response.choices?.[0]?.message?.content ?? "");
 }
 

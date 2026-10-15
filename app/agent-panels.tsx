@@ -44,6 +44,10 @@ export function NodePanel({ node, fields, keyHints, onChange }: NodePanelProps) 
 
 function TableStatePanel({ agentName }: { agentName: string }) {
   const [sample, setSample] = useState("");
+  const dealSample = () => {
+    const spot = sampleSpot(agentName || "Your agent");
+    setSample(briefing(spot));
+  };
   return (
     <div className="mt-2 space-y-3 text-sm">
       <p className="text-cream/75">
@@ -51,7 +55,7 @@ function TableStatePanel({ agentName }: { agentName: string }) {
         every action so far this hand. Then &ldquo;It is your turn to act now&rdquo;, its legal moves with the minimum and maximum amounts, and the
         answer format.
       </p>
-      <button type="button" className="rounded-full bg-black/35 px-3 py-1.5 text-xs ring-1 ring-gold/30 hover:bg-[#5a121b]" onClick={() => setSample(briefing(sampleSpot(agentName || "Your agent")))}>
+      <button type="button" className="rounded-full bg-black/35 px-3 py-1.5 text-xs ring-1 ring-gold/30 hover:bg-[#5a121b]" onClick={dealSample}>
         {sample ? "Deal another sample hand" : "Show a sample briefing"}
       </button>
       {sample && <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-black/40 p-3 text-xs text-cream/85">{sample}</pre>}
@@ -98,14 +102,22 @@ function ModelPanel({ fields, keyHints, onChange }: ModelPanelProps) {
       return;
     }
     let stillWanted = true;
-    fetchJson<{ models: ModelOption[] }>("/api/models", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ provider: fields.provider }) })
+    fetchJson<{ models: ModelOption[] }>("/api/models", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ provider: fields.provider }),
+    })
       .then(({ models: listed }) => {
         if (stillWanted) {
           setModels(listed);
           pickDefaultModel(listed);
         }
       })
-      .catch((e: Error) => stillWanted && setListError(e.message));
+      .catch((e: Error) => {
+        if (stillWanted) {
+          setListError(e.message);
+        }
+      });
     return () => {
       stillWanted = false;
     };

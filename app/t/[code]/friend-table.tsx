@@ -150,6 +150,11 @@ export function FriendTable() {
   const game = view.game;
   const me = view.you;
   const labels = view.names.map((seatName, seat) => (seat === me ? "You" : seatName));
+  const tick = () => {
+    if (!muted) {
+      play("tick");
+    }
+  };
   const errorMessage = error && (
     <p role="alert" className="mt-3 text-red-200">
       {error}
@@ -158,6 +163,7 @@ export function FriendTable() {
 
   // Not seated yet: say who you are.
   if (me < 0) {
+    const haveName = Boolean(name.trim() || session); // typed, or taken from your account
     return (
       <Shell>
         <h1 className="font-display text-4xl font-bold tracking-wide text-white sm:text-5xl">JOIN THE TABLE</h1>
@@ -174,7 +180,7 @@ export function FriendTable() {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <button disabled={busy || !(name.trim() || session)} className="btn-gold disabled:opacity-50">
+          <button disabled={busy || !haveName} className="btn-gold disabled:opacity-50">
             JOIN
           </button>
         </form>
@@ -235,6 +241,7 @@ export function FriendTable() {
   const myTurn = !handOver && game.turn === me;
   const busted = mine.stack === 0 && (!mine.cards.length || handOver);
   const stuck = handOver && playersWithChips(game) < 2;
+  const colors = labels.map((_, seat) => colorFor(seat, labels.length));
 
   return (
     <main className="flex min-h-dvh flex-col">
@@ -262,7 +269,7 @@ export function FriendTable() {
           game={game}
           me={me}
           labels={labels}
-          colors={labels.map((_, seat) => colorFor(seat, labels.length))}
+          colors={colors}
           thinking={!handOver && game.turn !== me ? { seat: game.turn } : undefined}
           timer={timer}
         />
@@ -275,7 +282,7 @@ export function FriendTable() {
               REBUY {view.stack.toLocaleString()}
             </button>
           )}
-          {myTurn && timer && <ActionBar game={game} deadline={timer.deadline} onAct={onAct} onTick={() => !muted && play("tick")} />}
+          {myTurn && timer && <ActionBar game={game} deadline={timer.deadline} onAct={onAct} onTick={tick} />}
         </div>
       )}
 
