@@ -61,7 +61,13 @@ const isHuman = (config: Config, seat: number) => config.playing && seat === 0;
 const canPause = (config: Config) => config.playing;
 
 /** Names at the table; you are "Human", because "You" would read as the AI itself in its prompts. */
-const seatNames = (config: Config) => Array.from({ length: config.seats }, (_, seat) => (isHuman(config, seat) ? "Human" : config.agents[seat].name));
+function seatNames(config: Config) {
+  const names: string[] = [];
+  for (let seat = 0; seat < config.seats; seat++) {
+    names.push(isHuman(config, seat) ? "Human" : config.agents[seat].name);
+  }
+  return names;
+}
 
 /** The settings that need a new game when they change. */
 const tableShape = (config: Config) => [config.seats, config.stack, config.bb, config.playing].join("|");
@@ -251,7 +257,9 @@ export default function PlayPage() {
   // Track activity for the idle check. Switching tabs or windows doesn't pause the game: it plays on in the background.
   useEffect(() => {
     lastActive.current = Date.now();
-    const markActive = () => (lastActive.current = Date.now());
+    const markActive = () => {
+      lastActive.current = Date.now();
+    };
     window.addEventListener("pointerdown", markActive);
     window.addEventListener("keydown", markActive);
     return () => {
@@ -326,7 +334,11 @@ export default function PlayPage() {
   }
 
   const save = async (config: Config, keys: KeyEdits) => {
-    const res = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config, keys }) });
+    const res = await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ config, keys }),
+    });
     const reply = await res.json();
     if (!res.ok) {
       throw new Error(reply.error ?? "Save failed");
@@ -365,16 +377,25 @@ export default function PlayPage() {
   const aiTurn = game.turn >= 0 && !isHuman(cfg, game.turn);
   const thinkingSecs = Math.floor(Math.max(0, now - turnAt) / 1000);
   // speech bubbles: the last three things said this hand, one per seat
-  const bubbles = new Map(
-    log
-      .filter((entry) => entry.hand === game.hand && entry.say)
-      .slice(-3)
-      .map((entry) => [entry.seat, entry.say]),
-  );
+  const saidThisHand = log.filter((entry) => entry.hand === game.hand && entry.say).slice(-3);
+  const bubbles = new Map(saidThisHand.map((entry) => [entry.seat, entry.say]));
   const gameOver = isGameOver(game, cfg);
   const mine = game.players[0];
   const busted = cfg.playing && mine.stack === 0 && (!mine.cards.length || game.street === "done");
-  const winnerLabel = labels[game.players.findIndex((player) => player.stack > 0)] ?? "Nobody";
+  const winnerSeat = game.players.findIndex((player) => player.stack > 0); // -1 when nobody has chips
+  const winnerLabel = labels[winnerSeat] ?? "Nobody";
+  const togglePause = () => {
+    if (paused === null) {
+      setPaused("");
+    } else {
+      resume();
+    }
+  };
+  const tick = () => {
+    if (!muted) {
+      play("tick");
+    }
+  };
 
   return (
     <main className="flex min-h-dvh flex-col">
@@ -396,7 +417,7 @@ export default function PlayPage() {
           <HeaderButton
             label={paused === null ? "Pause" : "Resume"}
             icon={paused === null ? "pause" : "play"}
-            onClick={() => (paused === null ? setPaused("") : resume())}
+            onClick={togglePause}
           />
         )}
         <HeaderButton label="New game" icon="restart" onClick={() => restart(cfg)} />
@@ -436,7 +457,7 @@ export default function PlayPage() {
             </button>
           )}
           {myTurn && (
-            <ActionBar game={game} deadline={turnAt + TURN_MS[cfg.speed]} onAct={humanAct} onTick={() => !muted && play("tick")} hotkeys={!settingsOpen && !standing} />
+            <ActionBar game={game} deadline={turnAt + TURN_MS[cfg.speed]} onAct={humanAct} onTick={tick} hotkeys={!settingsOpen && !standing} />
           )}
         </div>
       )}

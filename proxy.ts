@@ -3,7 +3,9 @@ import { NextResponse, type NextRequest } from "next/server";
 
 // Pages need a signed-in session (an optimistic cookie check; every API route verifies the session itself).
 export function proxy(request: NextRequest) {
-  if (getSessionCookie(request)) return NextResponse.next();
+  if (getSessionCookie(request)) {
+    return NextResponse.next();
+  }
   const login = new URL("/login", request.url);
   login.searchParams.set("next", request.nextUrl.pathname);
   return NextResponse.redirect(login);

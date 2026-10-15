@@ -43,7 +43,10 @@ export async function PUT(req: Request) {
   }
 
   // A blank key deletes it, like null.
-  const cleanedEdits = keyEdits.map(([id, key]): [string, string | null] => [id, typeof key === "string" ? key.trim() || null : null]);
+  const cleanedEdits = keyEdits.map(([id, key]): [string, string | null] => {
+    const trimmed = typeof key === "string" ? key.trim() : "";
+    return [id, trimmed || null];
+  });
   await saveSettings(userId, config ? normalize(config) : undefined, cleanedEdits);
   return Response.json(await settingsFor(userId));
 }

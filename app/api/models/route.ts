@@ -54,7 +54,10 @@ async function anthropicModels(key: string, signal: AbortSignal): Promise<ModelO
   for await (const model of new Anthropic({ apiKey: key }).models.list({ lifecycle: ["active"], limit: 100 }, { signal })) {
     // effort only goes out with adaptive thinking (see lib/agents.ts), so the model needs both
     const capabilities = model.capabilities;
-    const effort = capabilities ? capabilities.effort.supported && capabilities.thinking.types.adaptive.supported : undefined;
+    let effort: boolean | undefined;
+    if (capabilities) {
+      effort = capabilities.effort.supported && capabilities.thinking.types.adaptive.supported;
+    }
     models.push({ id: model.id, name: model.display_name, effort });
     if (models.length >= MAX) {
       break;
@@ -68,7 +71,10 @@ async function openAIModels(key: string, signal: AbortSignal): Promise<ModelOpti
   return data
     .filter((model) => OPENAI_CHAT.test(model.id) && !OPENAI_NOT_CHAT.test(model.id))
     .sort((a, b) => b.created - a.created)
-    .map((model) => ({ id: model.id, name: model.id, effort: OPENAI_REASONING.test(model.id) && !model.id.includes("-chat") }));
+    .map((model) => {
+      const reasons = OPENAI_REASONING.test(model.id) && !model.id.includes("-chat");
+      return { id: model.id, name: model.id, effort: reasons };
+    });
 }
 
 type OpenRouterModel = {

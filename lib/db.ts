@@ -33,7 +33,8 @@ export async function getAgentKey(userId: string, seat: number, provider: string
   const seatKeyId = `seat:${seat}`;
   const rows = await prisma.apiKey.findMany({ where: { userId, id: { in: [seatKeyId, provider] } } });
   const seatKey = rows.find((row) => row.id === seatKeyId);
-  return (seatKey ?? rows[0])?.key;
+  const providerKey = rows.find((row) => row.id === provider);
+  return (seatKey ?? providerKey)?.key;
 }
 
 /** Which keys this account has set, as masked hints - raw keys never leave the server. */
@@ -44,7 +45,10 @@ export async function keyHints(userId: string): Promise<Record<string, string>> 
 
 /** Save this account's config (if given) and key edits atomically; a null key deletes it. */
 export async function saveSettings(userId: string, config: Config | undefined, keys: [string, string | null][]) {
-  const configWrites = config ? [prisma.settings.upsert({ where: { userId }, create: { userId, config }, update: { config } })] : [];
+  const configWrites = [];
+  if (config) {
+    configWrites.push(prisma.settings.upsert({ where: { userId }, create: { userId, config }, update: { config } }));
+  }
   const keyWrites = keys.map(([id, key]) => {
     if (key === null) {
       return prisma.apiKey.deleteMany({ where: { userId, id } });
@@ -129,10 +133,11 @@ export async function updateAgent(userId: string, id: string, input: AgentInput)
   try {
     return toSavedAgent(await prisma.agent.update({ where: { id, userId }, data: agentData(input) }));
   } catch (error) {
-    if (prismaErrorCode(error) === "P2025") {
+    const code = prismaErrorCode(error);
+    if (code === "P2025") {
       return "not found";
     }
-    if (prismaErrorCode(error) === "P2002") {
+    if (code === "P2002") {
       return "duplicate name";
     }
     throw error;

@@ -25,8 +25,12 @@ const MIN_EMAIL_PASSWORD_LENGTH = 8;
 /** Where to go after signing in: the page that sent you here, only if it resolves to this site ("/\evil.com" doesn't). */
 function nextPath() {
   try {
-    const url = new URL(new URLSearchParams(location.search).get("next") ?? "/", location.origin);
-    return url.origin === location.origin ? url.pathname + url.search + url.hash : "/";
+    const next = new URLSearchParams(location.search).get("next") ?? "/";
+    const url = new URL(next, location.origin);
+    if (url.origin !== location.origin) {
+      return "/";
+    }
+    return url.pathname + url.search + url.hash;
   } catch {
     return "/";
   }
@@ -47,7 +51,9 @@ function downloadCredentials({ id, password, hash }: Creds) {
   ].join("\n");
   const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
   const safeId = id.replace(/[^\w-]+/g, "_") || "account";
-  const link = Object.assign(document.createElement("a"), { href: url, download: `agent-holdem-${safeId}-${hash.slice(0, 8)}.txt` });
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `agent-holdem-${safeId}-${hash.slice(0, 8)}.txt`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -140,7 +146,11 @@ export default function LoginPage() {
   /** Fill the hash sign-in form from a downloaded account file. */
   const loadFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const text = (await e.target.files?.[0]?.text()) ?? "";
-    const field = (label: string) => text.match(new RegExp(`^${label}: (.*)$`, "m"))?.[1] ?? "";
+    // each value sits on its own "Label: value" line
+    const field = (label: string) => {
+      const line = text.match(new RegExp(`^${label}: (.*)$`, "m"));
+      return line?.[1] ?? "";
+    };
     const hash = field("Hash").trim();
     if (!HASH.test(hash)) {
       setError("That file doesn't look like an Agent Hold'em account file.");
@@ -189,6 +199,8 @@ export default function LoginPage() {
   if (busy) {
     submitLabel = "ONE MOMENT…";
   }
+  // with Turnstile set up, creating an account waits for its token
+  const waitingForCaptcha = creating && Boolean(TURNSTILE_SITE_KEY) && !captcha;
   const passwordInput = (
     <input
       type="password"
@@ -284,7 +296,7 @@ export default function LoginPage() {
           </p>
         )}
         {creating && <Turnstile key={captchaRound} onToken={setCaptcha} />}
-        <button disabled={busy || (creating && !!TURNSTILE_SITE_KEY && !captcha)} className="btn-gold w-full disabled:opacity-60">
+        <button disabled={busy || waitingForCaptcha} className="btn-gold w-full disabled:opacity-60">
           {submitLabel}
         </button>
       </form>

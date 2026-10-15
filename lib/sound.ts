@@ -60,7 +60,11 @@ const SOUNDS = {
     tone(150, 0.11, 0.09, "sine", 0.3);
   },
   fold: () => noise(0, 0.22, 0.35, 900),
-  win: () => [523, 659, 784, 1047].forEach((frequency, i) => tone(frequency, i * 0.09, 0.3, "triangle", 0.11)),
+  win: () => {
+    // a rising C major arpeggio
+    const notes = [523, 659, 784, 1047];
+    notes.forEach((frequency, i) => tone(frequency, i * 0.09, 0.3, "triangle", 0.11));
+  },
   turn: () => {
     tone(880, 0, 0.18, "sine", 0.12);
     tone(1320, 0.13, 0.25, "sine", 0.1);

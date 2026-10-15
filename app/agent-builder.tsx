@@ -208,7 +208,11 @@ export function AgentBuilder() {
       setAgentId(agent.id);
       setFields(savedFields);
       setSavedSnapshot(snapshot(savedFields, layout));
-      setAgents((current) => [summaryOf(agent), ...(current ?? []).filter((listed) => listed.id !== agent.id)]);
+      // the saved agent moves to the front of the list
+      setAgents((current) => {
+        const others = (current ?? []).filter((listed) => listed.id !== agent.id);
+        return [summaryOf(agent), ...others];
+      });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -269,8 +273,9 @@ export function AgentBuilder() {
     return <p className="text-cream/70">Loading your agents…</p>;
   }
 
-  const missingNodes = REMOVABLE_NODES.filter((id) => !nodes.some((node) => node.id === id));
-  const panelNode = selectedNode && nodes.some((node) => node.id === selectedNode) ? selectedNode : null;
+  const isOnCanvas = (id: NodeId) => nodes.some((node) => node.id === id);
+  const missingNodes = REMOVABLE_NODES.filter((id) => !isOnCanvas(id));
+  const panelNode = selectedNode && isOnCanvas(selectedNode) ? selectedNode : null;
   const atLimit = agents.length >= AGENT_LIMIT;
   const statusText = missing ?? (hasUnsavedChanges ? "Ready to save." : "Saved.");
   const canSave = !missing && hasUnsavedChanges && fields.name.trim().length > 0 && !saving;

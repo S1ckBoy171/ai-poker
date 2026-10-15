@@ -41,5 +41,6 @@ export function soundsForUpdate(before: Game, game: Game, me: number): TimedSoun
   }
 
   const dealMs = dealtCards * DEAL_STEP_MS;
-  return [...dealSounds, ...laterSounds.map((sound, i): TimedSound => ({ sound, delayMs: dealMs + i * SOUND_GAP_MS }))];
+  const laterTimed = laterSounds.map((sound, i): TimedSound => ({ sound, delayMs: dealMs + i * SOUND_GAP_MS }));
+  return [...dealSounds, ...laterTimed];
 }

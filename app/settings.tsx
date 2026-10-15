@@ -29,7 +29,11 @@ export function SettingsModal({ cfg, hints, onSave, onClose }: SettingsModalProp
   };
 
   useEffect(() => {
-    const closeOnEscape = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const closeOnEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [onClose]);
@@ -72,7 +76,12 @@ export function SettingsModal({ cfg, hints, onSave, onClose }: SettingsModalProp
   const save = async () => {
     setError("");
     // empty inputs mean "unchanged", not "delete"
-    const edits = Object.fromEntries(Object.entries(keys).filter(([, key]) => key === null || key.trim()));
+    const edits: KeyEdits = {};
+    for (const [id, key] of Object.entries(keys)) {
+      if (key === null || key.trim()) {
+        edits[id] = key;
+      }
+    }
     await onSave(draft, edits).catch((e: Error) => setError(e.message));
   };
 

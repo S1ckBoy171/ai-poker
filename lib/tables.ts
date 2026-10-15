@@ -158,8 +158,10 @@ function runTimers(table: TableData, now: number): boolean {
 
 export async function createTable(name: unknown, stack: unknown, bb: unknown) {
   const host = cleanName(name) || fail(400, "Enter your name.");
-  const bigBlind = Math.min(1_000_000, Math.max(2, Math.round(Number(bb)) || 20));
-  const startingStack = Math.min(100_000_000, Math.max(bigBlind * 10, Math.round(Number(stack)) || 1000));
+  const requestedBb = Math.round(Number(bb)) || 20;
+  const bigBlind = Math.min(1_000_000, Math.max(2, requestedBb));
+  const requestedStack = Math.round(Number(stack)) || 1000;
+  const startingStack = Math.min(100_000_000, Math.max(bigBlind * 10, requestedStack)); // at least 10 big blinds
   const token = randomUUID();
   const code = randomBytes(4).toString("hex"); // 8-char random hash = the invite code
   // ponytail: no retry on a code collision (1 in 4 billion per table); add one if tables pile up

@@ -19,7 +19,8 @@ export function defaultModel(provider: Provider, models: ModelOption[]): string 
  */
 export function seatNameFor(modelId: string, option: ModelOption | undefined): string {
   if (!option) {
-    return (modelId.split("/").at(-1) ?? modelId).slice(0, 18);
+    const afterSlash = modelId.split("/").at(-1) ?? modelId;
+    return afterSlash.slice(0, 18);
   }
   return option.name
     .replace(/^[^:]+:\s*/, "")

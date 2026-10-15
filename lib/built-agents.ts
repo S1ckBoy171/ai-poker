@@ -42,8 +42,13 @@ const isEffort = (value: unknown): value is Effort => EFFORTS.some((effort) => e
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
+/** True when `wires` has a wire from `wire.from` to `wire.to`. */
+function hasWire(wires: Wire[], wire: { from: string; to: string }): boolean {
+  return wires.some((existing) => existing.from === wire.from && existing.to === wire.to);
+}
+
 export function isAllowedWire(from: string, to: string): boolean {
-  return REQUIRED_WIRES.some((wire) => wire.from === from && wire.to === to);
+  return hasWire(REQUIRED_WIRES, { from, to });
 }
 
 /** A new agent's canvas: all four nodes placed left to right, nothing wired yet. */
@@ -73,7 +78,7 @@ export function whatIsMissing(agent: { prompt: string; model: string; layout: Ag
   if (!agent.model.trim()) {
     return "Choose a model.";
   }
-  const missingWire = REQUIRED_WIRES.find((required) => !agent.layout.wires.some((wire) => wire.from === required.from && wire.to === required.to));
+  const missingWire = REQUIRED_WIRES.find((required) => !hasWire(agent.layout.wires, required));
   if (missingWire) {
     return `Connect the ${NODE_LABELS[missingWire.from]} to the ${NODE_LABELS[missingWire.to]}.`;
   }
@@ -142,8 +147,7 @@ function checkLayout(raw: unknown): AgentLayout | null {
     if (!wire) {
       return null;
     }
-    const alreadyAdded = wires.some((added) => added.from === wire.from && added.to === wire.to);
-    if (!alreadyAdded) {
+    if (!hasWire(wires, wire)) {
       wires.push(wire);
     }
   }

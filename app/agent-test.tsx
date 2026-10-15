@@ -51,7 +51,9 @@ export function AgentTest({ agentId, blockedReason, onClose }: AgentTestProps) {
   const runningRequest = useRef<AbortController | null>(null);
 
   // Closing the drawer stops a running test, so its calls stop costing money.
-  useEffect(() => () => runningRequest.current?.abort(), []);
+  useEffect(() => {
+    return () => runningRequest.current?.abort();
+  }, []);
 
   const run = async () => {
     if (!agentId) {

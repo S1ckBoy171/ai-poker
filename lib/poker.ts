@@ -109,6 +109,17 @@ function score(category: number, tieBreakers: number[]): number {
   return fiveRanks.reduce((value, rank) => value * 15 + rank, category);
 }
 
+/** The ranks of the cards in a suit five or more of them share, highest first; undefined if there is no flush. */
+function flushRanksOf(cards: Card[]): number[] | undefined {
+  for (const suit of SUITS) {
+    const suited = cards.filter((card) => card[1] === suit);
+    if (suited.length >= 5) {
+      return suited.map(rankValue).sort((a, b) => b - a);
+    }
+  }
+  return undefined;
+}
+
 /** Best 5-card hand out of 2-7 cards as a comparable number (higher wins). */
 export function handValue(cards: Card[]): number {
   const countByRank = new Map<number, number>();
@@ -120,11 +131,11 @@ export function handValue(cards: Card[]): number {
   const distinctRanks = [...countByRank.keys()].sort((a, b) => b - a);
   const kickers = (count: number, ...used: number[]) => distinctRanks.filter((rank) => !used.includes(rank)).slice(0, count);
 
-  const flushCards = [...SUITS].map((suit) => cards.filter((card) => card[1] === suit)).find((suited) => suited.length >= 5);
-  const flushRanks = flushCards?.map(rankValue).sort((a, b) => b - a);
+  const flushRanks = flushRanksOf(cards);
   const straightFlush = flushRanks ? straightHigh(flushRanks) : 0;
   const straight = straightHigh(distinctRanks);
-  const [[top, topCount], [second, secondCount] = [0, 0]] = groups;
+  const [top, topCount] = groups[0];
+  const [second, secondCount] = groups[1] ?? [0, 0]; // no second group: every card is the same rank
 
   if (straightFlush) {
     return score(CATEGORY.straightFlush, [straightFlush]);
@@ -347,7 +358,8 @@ export function legalize(game: Game, action: Action): Action {
   const { owe, minTo, maxTo, canRaise } = legal(game);
   if (action.type === "raise" && canRaise) {
     const requested = action.amount ?? minTo;
-    return { type: "raise", amount: Math.round(Math.min(maxTo, Math.max(minTo, requested))) };
+    const clamped = Math.min(maxTo, Math.max(minTo, requested));
+    return { type: "raise", amount: Math.round(clamped) };
   }
   if (action.type === "fold" && owe > 0) {
     return action;
@@ -450,7 +462,12 @@ function advance(game: Game): Game {
 
 /** Move this street's bets into the pot, remembering who put in what for the chip animation. */
 function sweep(game: Game) {
-  const bets = game.players.flatMap((player, seat) => (player.bet > 0 ? [{ street: game.street, seat, amount: player.bet }] : []));
+  const bets: Game["swept"] = [];
+  game.players.forEach((player, seat) => {
+    if (player.bet > 0) {
+      bets.push({ street: game.street, seat, amount: player.bet });
+    }
+  });
   if (bets.length) {
     game.swept = bets;
   }
@@ -474,7 +491,11 @@ function splitPots(game: Game, contenders: number[], scores: number[]): Map<numb
   levels.forEach((level, index) => {
     const isLastPot = index === levels.length - 1;
     const cap = isLastPot ? Infinity : level; // the last pot also sweeps up any folded overage
-    const pot = game.players.reduce((sum, player) => sum + Math.min(player.committed, cap) - Math.min(player.committed, floor), 0);
+    let pot = 0;
+    for (const player of game.players) {
+      // what this player put in between the previous level and this pot's cap
+      pot += Math.min(player.committed, cap) - Math.min(player.committed, floor);
+    }
     const eligible = contenders.filter((seat) => game.players[seat].committed >= level);
     const bestScore = Math.max(...eligible.map((seat) => scores[seat]));
     const potWinners = eligible.filter((seat) => scores[seat] === bestScore);
@@ -583,7 +604,8 @@ export function tableLines(game: Game): string[] {
 
 /** Read a model's answer: the last {...} in its text, holding an action and optional table talk. Null if unusable. */
 export function parseReply(text: string): AgentReply | null {
-  const lastObject = [...text.matchAll(/\{[^{}]*\}/g)].at(-1)?.[0] ?? "";
+  const objects = text.match(/\{[^{}]*\}/g) ?? [];
+  const lastObject = objects.at(-1) ?? "";
   let reply: Record<string, unknown>;
   try {
     reply = JSON.parse(lastObject);
