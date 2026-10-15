@@ -283,6 +283,27 @@ export function addPlayer(previous: Game, name: string, stack: number, seat: num
   return game;
 }
 
+/**
+ * Take the player at `seat` away from the table between hands (they stood up). Players after that seat move down one
+ * seat number, and the dealer button stays where it is, so the next hand's button moves on as usual.
+ */
+export function removePlayer(previous: Game, seat: number): Game {
+  if (previous.street !== "done") {
+    throw new Error("Players can only leave the table between hands.");
+  }
+  const game = structuredClone(previous);
+  game.players.splice(seat, 1);
+
+  const movedSeat = (old: number) => (old > seat ? old - 1 : old);
+  // the seat before the leaver keeps the button, so the next deal passes it to whoever sat after them
+  const dealer = game.dealer >= seat ? game.dealer - 1 : game.dealer;
+  game.dealer = (dealer + game.players.length) % Math.max(1, game.players.length);
+  game.turn = -1;
+  game.winners = game.winners.filter((winner) => winner.seat !== seat).map((winner) => ({ ...winner, seat: movedSeat(winner.seat) }));
+  game.swept = game.swept.filter((bet) => bet.seat !== seat).map((bet) => ({ ...bet, seat: movedSeat(bet.seat) }));
+  return game;
+}
+
 /** The table as one seat may see it: no deck, and nobody else's hole cards until they show them at showdown ("" = face down). */
 export function viewFor(game: Game, seat: number): Game {
   const showdown = isShowdown(game);

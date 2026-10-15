@@ -9,6 +9,7 @@ npm install                # also runs prisma generate
 npx prisma migrate deploy  # create tables
 npm run dev                # http://localhost:3000
 npm test                   # poker engine checks
+npm run typecheck          # route types + tsc
 ```
 
 Everything needs an account (see Accounts). The server listens on 127.0.0.1 only, and the API routes that spend your keys or change settings also accept requests only from the app's own page.
@@ -38,7 +39,9 @@ Bot-match settings, API keys and hand history belong to one account each: nobody
 
 Keys and settings are saved in Postgres (`settings` and `api_keys` tables, keys in plaintext). Keys never go back to the browser: the UI only sees masked hints, and `/api/agent` looks up the key for the seat on the server. Seats without a working key are played by a simple house bot, and the error shows in **Table talk**.
 
-Every AI turn is a paid API call, so the game pauses itself when the tab goes to the background, when your turn timer runs out, and before a new hand after 5 minutes with no clicks or key presses (`IDLE_MS` in `app/play/page.tsx`).
+You leave a table only with the **Stand up** button (door icon): Back, the home link and closing or reloading the tab ask first, and a reload or a reopened tab carries on with the same game (bot matches are kept in the browser per account; friend tables find your seat again with the token in your browser). At a friend table, standing up mid-hand folds you when your turn comes and you leave when the hand ends.
+
+Switching tabs or windows doesn't pause the game. When you play, the **Pause** button stops the AIs, and since every AI turn is a paid API call the game also pauses itself when your turn timer runs out, and before a new hand after 5 minutes with no clicks or key presses (`IDLE_MS` in `app/play/page.tsx`). When you only watch (an AI vs AI match) there is no pause: the match plays on until it ends, so turn on Auto Re-Buy only if you mean to keep paying for it. Friend tables can't be paused either.
 
 ## Friend tables (`/t/<code>`)
 
