@@ -1,6 +1,8 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { authClient } from "@/lib/auth-client";
 import { PROVIDERS, type Config } from "@/lib/config";
 import { fetchJson } from "@/lib/fetch-json";
 import {
@@ -20,7 +22,20 @@ import {
 import { play } from "@/lib/sound";
 import type { SettingsResponse } from "../api/settings/route";
 import { SettingsModal, type KeyEdits } from "../settings";
-import { ActionBar, HeaderButton, LogPanel, StatsPanel, TableHeader, TableView, useMuted, useTableSounds, yourTurnLine, type LogEntry } from "../table";
+import {
+  ActionBar,
+  HeaderButton,
+  LogPanel,
+  StandDialog,
+  StatsPanel,
+  TableHeader,
+  TableView,
+  useLeaveGuard,
+  useMuted,
+  useTableSounds,
+  yourTurnLine,
+  type LogEntry,
+} from "../table";
 import { Icon } from "../ui";
 
 type Entry = LogEntry & { hand: number; seat?: number };
@@ -28,7 +43,7 @@ type Decision = AgentReply & { error?: string };
 /** Who just acted, and what came with it, for the table log. */
 type TurnNote = { seat?: number; say?: string; error?: string };
 
-const IDLE_MS = 5 * 60_000; // no clicks/keys for this long = nobody is watching, stop paying for AI turns
+const IDLE_MS = 5 * 60_000; // while you play: no clicks/keys for this long = you're away, stop paying for AI turns
 const TURN_MS = { fast: 15_000, normal: 30_000 }; // your time to act before an automatic check (or fold)
 const NEXT_HAND_MS = { fast: 3000, normal: 5500 }; // the result stays up this long
 const MIN_AI_TURN_MS = { fast: 400, normal: 1200 }; // even instant answers take this long, so the table is readable
@@ -38,6 +53,12 @@ const YOUR_COLOR = "#e8c27a";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const isHuman = (config: Config, seat: number) => config.playing && seat === 0;
+
+/**
+ * Only a table you sit at can be paused. When you watch the AIs play each other (an AI vs AI match), nobody's turn
+ * waits on you, so the match runs on until it ends.
+ */
+const canPause = (config: Config) => config.playing;
 
 /** Names at the table; you are "Human", because "You" would read as the AI itself in its prompts. */
 function seatNames(config: Config) {
@@ -54,6 +75,31 @@ const tableShape = (config: Config) => [config.seats, config.stack, config.bb, c
 const freshGame = (config: Config) => startHand(newGame(seatNames(config), config.stack, config.bb));
 
 const isGameOver = (game: Game, config: Config) => game.street === "done" && !config.rebuy && playersWithChips(game) < 2;
+
+/** The match in progress, kept in this browser per account, so a reload or a reopened tab carries on with it. */
+type SavedMatch = { shape: string; game: Game; log: Entry[] };
+const savedMatchKey = (userId: string) => `agent-holdem-match:${userId}`;
+
+function readSavedMatch(userId: string, config: Config): SavedMatch | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(savedMatchKey(userId)) ?? "null") as SavedMatch | null;
+    return saved?.shape === tableShape(config) ? saved : null; // the table settings changed since: start afresh
+  } catch {
+    return null;
+  }
+}
+
+function writeSavedMatch(userId: string, match: SavedMatch | null) {
+  try {
+    if (match) {
+      localStorage.setItem(savedMatchKey(userId), JSON.stringify(match));
+    } else {
+      localStorage.removeItem(savedMatchKey(userId));
+    }
+  } catch {
+    // storage blocked: a reload starts a new game, nothing else breaks
+  }
+}
 
 /** Deal the next hand, first applying renamed seats and the auto rebuy / top-off settings. */
 function dealNextHand(game: Game, config: Config): Game {
@@ -131,6 +177,9 @@ function saveFinishedHand(game: Game, config: Config) {
 }
 
 export default function PlayPage() {
+  const router = useRouter();
+  const [userId, setUserId] = useState("");
+  const [standing, setStanding] = useState(false); // the stand-up prompt is open
   const [cfg, setCfg] = useState<Config | null>(null);
   const [hints, setHints] = useState<Record<string, string>>({});
   const [game, setGame] = useState<Game | null>(null);
@@ -177,33 +226,45 @@ export default function PlayPage() {
   });
 
   useEffect(() => {
-    fetchJson<SettingsResponse>("/api/settings")
-      .then(({ config, keys }) => {
+    Promise.all([fetchJson<SettingsResponse>("/api/settings"), authClient.getSession()])
+      .then(([{ config, keys }, session]) => {
+        const account = session.data?.user.id ?? "";
+        setUserId(account);
         setCfg(config);
         setHints(keys);
-        commitFromEffect(null, freshGame(config));
+        const saved = account ? readSavedMatch(account, config) : null;
+        if (!saved) {
+          commitFromEffect(null, freshGame(config));
+          return;
+        }
+        setGame(saved.game);
+        setLog(saved.log);
+        setTurnAt(Date.now()); // whoever is to act gets a fresh clock
       })
       .catch((e) => setLoadError(`Could not load settings: ${e.message}`));
   }, []);
 
-  // Every AI turn is a paid API call: pause when the tab goes to the background, and track activity for the idle check.
+  // Keep the match in this browser after every change, so a reload or a reopened tab resumes it.
+  useEffect(() => {
+    if (userId && cfg && game) {
+      writeSavedMatch(userId, { shape: tableShape(cfg), game, log });
+    }
+  }, [userId, cfg, game, log]);
+
+  // Seated at a match, you leave with the Stand button only.
+  useLeaveGuard(!!game && !standing, () => setStanding(true));
+
+  // Track activity for the idle check. Switching tabs or windows doesn't pause the game: it plays on in the background.
   useEffect(() => {
     lastActive.current = Date.now();
     const markActive = () => {
       lastActive.current = Date.now();
     };
-    const pauseWhenHidden = () => {
-      if (document.hidden) {
-        setPaused("Tab was in the background");
-      }
-    };
     window.addEventListener("pointerdown", markActive);
     window.addEventListener("keydown", markActive);
-    document.addEventListener("visibilitychange", pauseWhenHidden);
     return () => {
       window.removeEventListener("pointerdown", markActive);
       window.removeEventListener("keydown", markActive);
-      document.removeEventListener("visibilitychange", pauseWhenHidden);
     };
   }, []);
 
@@ -218,7 +279,7 @@ export default function PlayPage() {
         return;
       }
       const timer = setTimeout(() => {
-        if (Date.now() - lastActive.current > IDLE_MS) {
+        if (canPause(cfg) && Date.now() - lastActive.current > IDLE_MS) {
           setPaused(`No activity for ${IDLE_MS / 60_000} minutes`);
           return;
         }
@@ -285,9 +346,18 @@ export default function PlayPage() {
     if (tableShape(reply.config) !== tableShape(cfg)) {
       restart(reply.config);
     }
+    if (!canPause(reply.config)) {
+      setPaused(null); // switched to watching: an AI vs AI match can't be paused
+    }
     setCfg(reply.config);
     setHints(reply.keys);
     setSettingsOpen(false);
+  };
+
+  /** Leave the table: the match ends and is forgotten, and you go home. */
+  const standUp = () => {
+    writeSavedMatch(userId, null);
+    router.push("/");
   };
 
   /** Your own rebuy, when auto re-buy is off and you're out of chips. */
@@ -330,6 +400,7 @@ export default function PlayPage() {
   return (
     <main className="flex min-h-dvh flex-col">
       <TableHeader
+        onHome={() => setStanding(true)}
         stack={cfg.playing ? mine.stack.toLocaleString() : "Spectating"}
         status={
           <>
@@ -342,13 +413,16 @@ export default function PlayPage() {
         <a href="/history" target="_blank" rel="noopener" aria-label="Hand history (opens a new tab)" title="Hand history" className="header-btn">
           <Icon name="history" className="h-5 w-5" />
         </a>
-        <HeaderButton
-          label={paused === null ? "Pause" : "Resume"}
-          icon={paused === null ? "pause" : "play"}
-          onClick={togglePause}
-        />
+        {canPause(cfg) && (
+          <HeaderButton
+            label={paused === null ? "Pause" : "Resume"}
+            icon={paused === null ? "pause" : "play"}
+            onClick={togglePause}
+          />
+        )}
         <HeaderButton label="New game" icon="restart" onClick={() => restart(cfg)} />
         <HeaderButton label="Table settings" icon="sliders" onClick={() => setSettingsOpen(true)} />
+        <HeaderButton label="Stand up and leave" icon="stand" onClick={() => setStanding(true)} />
       </TableHeader>
 
       {Object.keys(hints).length === 0 && (
@@ -383,7 +457,7 @@ export default function PlayPage() {
             </button>
           )}
           {myTurn && (
-            <ActionBar game={game} deadline={turnAt + TURN_MS[cfg.speed]} onAct={humanAct} onTick={tick} hotkeys={!settingsOpen} />
+            <ActionBar game={game} deadline={turnAt + TURN_MS[cfg.speed]} onAct={humanAct} onTick={tick} hotkeys={!settingsOpen && !standing} />
           )}
         </div>
       )}
@@ -401,6 +475,14 @@ export default function PlayPage() {
             </button>
           </div>
         </div>
+      )}
+
+      {standing && (
+        <StandDialog
+          detail="This match ends for good and can't be resumed."
+          onStand={standUp}
+          onStay={() => setStanding(false)}
+        />
       )}
 
       {settingsOpen && <SettingsModal cfg={cfg} hints={hints} onSave={save} onClose={() => setSettingsOpen(false)} />}

@@ -2,7 +2,7 @@
 
 // The poker table UI shared by bot matches (/play) and friend tables (/t/[code]).
 import Link from "next/link";
-import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { isShowdown, legal, potTotal, type Action, type Game, type LegalOptions, type Player, type Winner } from "@/lib/poker";
 import { play, unlockAudio } from "@/lib/sound";
 import { DEALER_SPOT, SEAT_SPOTS, SPOT_COUNT, railPoint, rimFacing, rimPoint, seatSpot, spotAngle, type Point } from "@/lib/table-shape";
@@ -846,13 +846,20 @@ type TableHeaderProps = {
   stack: ReactNode; // shown in the chip pill
   status: ReactNode; // hand, blinds... (large screens only)
   children: ReactNode; // the header buttons
+  onHome?: () => void; // while seated, the home link asks you to stand up instead of leaving
 };
 
 /** The bar above the table: home link, your chips, the hand status and the header buttons. */
-export function TableHeader({ stack, status, children }: TableHeaderProps) {
+export function TableHeader({ stack, status, children, onHome }: TableHeaderProps) {
+  const askToStand = (e: MouseEvent) => {
+    if (onHome) {
+      e.preventDefault();
+      onHome();
+    }
+  };
   return (
     <header className="flex items-center justify-between gap-2 border-b-2 border-[#c9965c]/60 bg-wine/90 px-3 py-2 sm:px-6">
-      <Link href="/" aria-label="Home" className="flex items-center gap-2 font-display text-lg tracking-wide sm:text-2xl">
+      <Link href="/" aria-label="Home" onClick={askToStand} className="flex items-center gap-2 font-display text-lg tracking-wide sm:text-2xl">
         <SpadeBadge />
         <span className="hidden sm:inline">
           <BrandName />
@@ -881,4 +888,71 @@ export function yourTurnLine(game: Game, me: number) {
     key: `${game.hand}-${game.history.length}`,
     text: `Your turn. ${toCall} Press F to fold, C to ${owe ? "call" : "check"}, R to raise.`,
   };
+}
+
+/**
+ * While `seated`, the Stand button is the only way out: the browser asks before a reload or closing the tab (and a
+ * reload resumes the same game), and Back opens the stand-up prompt instead of leaving the page.
+ */
+export function useLeaveGuard(seated: boolean, onLeaveAttempt: () => void) {
+  const leaveAttempt = useEffectEvent(onLeaveAttempt);
+  useEffect(() => {
+    if (!seated) {
+      return;
+    }
+    const askBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = ""; // older browsers need this to show the prompt
+    };
+    // An extra history entry for this page: Back only steps off it, so we stay here and put it back.
+    const addGuardEntry = () => window.history.pushState({ ...window.history.state, standGuard: true }, "");
+    if (!window.history.state?.standGuard) {
+      addGuardEntry();
+    }
+    const onBack = () => {
+      addGuardEntry();
+      leaveAttempt();
+    };
+    window.addEventListener("beforeunload", askBeforeUnload);
+    window.addEventListener("popstate", onBack);
+    return () => {
+      window.removeEventListener("beforeunload", askBeforeUnload);
+      window.removeEventListener("popstate", onBack);
+    };
+  }, [seated]);
+}
+
+type StandDialogProps = {
+  detail: string; // what standing up means at this table
+  busy?: boolean;
+  error?: string;
+  onStand: () => void;
+  onStay: () => void;
+};
+
+/** "Stand up and leave the table?" with Stand up and Stay buttons. */
+export function StandDialog({ detail, busy, error, onStand, onStay }: StandDialogProps) {
+  return (
+    <div className="anim-fade fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={onStay}>
+      <div role="dialog" aria-modal aria-labelledby="stand-title" className="anim-modal panel max-w-md p-8 text-center" onClick={(e) => e.stopPropagation()}>
+        <h2 id="stand-title" className="font-display text-3xl font-bold text-white">
+          STAND UP?
+        </h2>
+        <p className="mt-3 text-cream/80">{detail}</p>
+        {error && (
+          <p role="alert" className="mt-3 text-red-200">
+            {error}
+          </p>
+        )}
+        <div className="mt-6 flex justify-center gap-3">
+          <button autoFocus className="rounded-full px-5 py-2 ring-1 ring-gold/40 hover:bg-black/30" onClick={onStay}>
+            STAY
+          </button>
+          <button className="btn-gold disabled:opacity-50" disabled={busy} onClick={onStand}>
+            STAND UP
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

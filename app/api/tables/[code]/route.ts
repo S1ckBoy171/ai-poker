@@ -1,5 +1,5 @@
 import { requireUser } from "@/lib/guard";
-import { dealFirstHand, errorResponse, joinTable, playerAction, readTable, type SeatAction } from "@/lib/tables";
+import { dealFirstHand, errorResponse, joinTable, playerAction, readTable, standUp, type SeatAction } from "@/lib/tables";
 
 // Signed in to reach a table at all; then each player's secret seat token (from creating or joining) travels in this header and proves which seat is theirs.
 const tokenOf = (req: Request) => req.headers.get("x-table-token") ?? "";
@@ -23,7 +23,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/tables/[code]">)
   }
 }
 
-/** Body: { op: "join", name } | { op: "deal" } | { op: "act", action: { type, amount? } } */
+/** Body: { op: "join", name } | { op: "deal" } | { op: "stand" } | { op: "act", action: { type, amount? } } */
 export async function POST(req: Request, ctx: RouteContext<"/api/tables/[code]">) {
   const userId = await requireUser(req);
   if (userId instanceof Response) {
@@ -37,6 +37,10 @@ export async function POST(req: Request, ctx: RouteContext<"/api/tables/[code]">
     }
     if (body.op === "deal") {
       return Response.json({ view: await dealFirstHand(code, tokenOf(req)) });
+    }
+    if (body.op === "stand") {
+      await standUp(code, tokenOf(req));
+      return Response.json({ ok: true });
     }
 
     const requested = body.action ?? {};

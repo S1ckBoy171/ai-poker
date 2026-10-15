@@ -2,7 +2,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { prisma } from "./db";
 import type { Prisma } from "./generated/prisma/client";
-import { act, addPlayer, legalize, newGame, playersWithChips, startHand, viewFor, type Action, type Game } from "./poker";
+import { act, addPlayer, legalize, newGame, playersWithChips, removePlayer, startHand, viewFor, type Action, type Game } from "./poker";
 import { joinSeat } from "./table-shape";
 
 export const TURN_MS = 30_000; // time to act before an automatic check (or fold)
@@ -11,7 +11,7 @@ const MAX_SEATS = 9;
 const UPDATE_ATTEMPTS = 5;
 export const CODE = /^[0-9a-f]{8}$/;
 
-type Seat = { name: string; token: string };
+type Seat = { name: string; token: string; leaving?: boolean }; // leaving: stood up mid-hand, goes when the hand ends
 type TableData = {
   stack: number;
   bb: number;
@@ -104,11 +104,42 @@ async function updateTable(code: string, change: (table: TableData) => boolean):
   return fail(409, "The table is busy, try again.");
 }
 
+/**
+ * Players who stood up: one whose turn it is folds at once, and between hands (or before the first deal) they leave
+ * the table. Returns whether anything changed.
+ */
+function seatLeavers(table: TableData, now: number): boolean {
+  let changed = false;
+  for (;;) {
+    const game = table.game;
+    const handRunning = !!game && game.street !== "done";
+    if (game && handRunning && table.seats[game.turn]?.leaving) {
+      table.game = act(game, { type: "fold" });
+      table.turnAt = now;
+      changed = true;
+      continue;
+    }
+    if (handRunning) {
+      return changed;
+    }
+    const leaver = table.seats.findIndex((seat) => seat.leaving);
+    if (leaver < 0) {
+      return changed;
+    }
+    table.seats.splice(leaver, 1);
+    if (table.game) {
+      table.game = removePlayer(table.game, leaver);
+    }
+    changed = true;
+  }
+}
+
 /** Steps nobody clicks for: a turn running out, and the next deal. Runs whenever anyone looks at the table. */
 function runTimers(table: TableData, now: number): boolean {
+  const leaversSeated = seatLeavers(table, now);
   const game = table.game;
   if (!game) {
-    return false;
+    return leaversSeated;
   }
   const handRunning = game.street !== "done";
   if (handRunning && now - table.turnAt > TURN_MS) {
@@ -122,7 +153,7 @@ function runTimers(table: TableData, now: number): boolean {
     table.turnAt = now;
     return true;
   }
-  return false;
+  return leaversSeated;
 }
 
 export async function createTable(name: unknown, stack: unknown, bb: unknown) {
@@ -202,6 +233,9 @@ export async function playerAction(code: string, token: string, action: SeatActi
     if (seat < 0) {
       fail(403, "You're not seated at this table.");
     }
+    if (current.seats[seat].leaving) {
+      fail(409, "You've stood up from this table.");
+    }
     const game = current.game ?? fail(409, "The game hasn't started yet.");
 
     if (action.type === "rebuy") {
@@ -221,7 +255,24 @@ export async function playerAction(code: string, token: string, action: SeatActi
     }
     current.game = act(game, legalize(game, action));
     current.turnAt = Date.now();
+    seatLeavers(current, current.turnAt); // a player who stood up and is next folds at once
     return true;
   });
   return tableViewFor(code, table, token);
+}
+
+/**
+ * Stand up: the only way to leave a table. Out of the hand (or between hands) you leave at once; in a hand you fold
+ * when your turn comes (straight away if it is now) and leave when the hand ends. Your chips leave with you.
+ */
+export async function standUp(code: string, token: string) {
+  await updateTable(code, (current) => {
+    const seat = seatOf(current, token);
+    if (seat < 0) {
+      fail(403, "You're not seated at this table.");
+    }
+    current.seats[seat].leaving = true;
+    seatLeavers(current, Date.now());
+    return true;
+  });
 }

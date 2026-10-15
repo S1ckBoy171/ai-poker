@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { authClient } from "@/lib/auth-client";
 import { fetchJson } from "@/lib/fetch-json";
@@ -9,7 +9,21 @@ import { playersWithChips, type Game } from "@/lib/poker";
 import { play } from "@/lib/sound";
 import { seatChair } from "@/lib/table-shape";
 import type { SeatAction, TableView as View } from "@/lib/tables";
-import { ActionBar, HeaderButton, LogPanel, StatsPanel, TableHeader, TableView, useMuted, useTableSounds, yourTurnLine, type LogEntry, type Timer } from "../../table";
+import {
+  ActionBar,
+  HeaderButton,
+  LogPanel,
+  StandDialog,
+  StatsPanel,
+  TableHeader,
+  TableView,
+  useLeaveGuard,
+  useMuted,
+  useTableSounds,
+  yourTurnLine,
+  type LogEntry,
+  type Timer,
+} from "../../table";
 
 const COLORS = ["#e8c27a", "#d97757", "#10a37f", "#7c7ff5", "#e05d8a", "#3fa7d6", "#9ccc65", "#ffb74d", "#ba68c8"];
 const MAX_SEATS = 9;
@@ -19,13 +33,33 @@ const COPIED_MS = 2000; // how long "LINK COPIED" shows
 /** A player's color goes with their chair, so it stays theirs when someone joins and seat numbers shift. */
 const colorFor = (seat: number, playerCount: number) => COLORS[seatChair(seat, playerCount) % COLORS.length];
 
-// Your seat's secret token for this table lives only in this browser.
+// Your seat's secret token for this table lives only in this browser. When storage is blocked it is kept in memory,
+// so you stay seated for this visit (a reload can't find your seat again).
 const tokenKey = (code: string) => `agent-holdem-table:${code}`;
+const tokensInMemory = new Map<string, string>();
 function readToken(code: string) {
   try {
-    return localStorage.getItem(tokenKey(code)) ?? "";
+    return localStorage.getItem(tokenKey(code)) ?? tokensInMemory.get(code) ?? "";
   } catch {
-    return "";
+    return tokensInMemory.get(code) ?? "";
+  }
+}
+
+function forgetToken(code: string) {
+  tokensInMemory.delete(code);
+  try {
+    localStorage.removeItem(tokenKey(code));
+  } catch {
+    // storage blocked: nothing was saved there
+  }
+}
+
+function saveToken(code: string, token: string) {
+  tokensInMemory.set(code, token);
+  try {
+    localStorage.setItem(tokenKey(code), token);
+  } catch {
+    // storage blocked: the copy in memory keeps you seated
   }
 }
 
@@ -37,6 +71,9 @@ function logEntriesFor(game: Game): LogEntry[] {
 
 export function FriendTable() {
   const { code } = useParams<{ code: string }>();
+  const router = useRouter();
+  const [standing, setStanding] = useState(false); // the stand-up prompt is open
+  const [standError, setStandError] = useState("");
   const [view, setView] = useState<View | null>(null);
   const [error, setError] = useState("");
   const [timer, setTimer] = useState<(Timer & { deadline: number }) | null>(null);
@@ -73,8 +110,11 @@ export function FriendTable() {
   const showFromPoll = useEffectEvent(show);
 
   // Every player polls the table each second; the server also runs turn timeouts and the next deal on these reads.
+  // The next poll is scheduled only once the last one is back, so a slow server never gets a pile of overlapping
+  // reads, and an older reply can't land after a newer one.
   useEffect(() => {
     let mounted = true;
+    let next: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       try {
         const latest = await fetchJson<View>(`/api/tables/${code}`, { headers: { "x-table-token": readToken(code) }, cache: "no-store" });
@@ -86,17 +126,23 @@ export function FriendTable() {
           setError((e as Error).message);
         }
       }
+      if (mounted) {
+        // ponytail: a full read every second per player; switch to server-sent events if tables get busy
+        next = setTimeout(poll, POLL_MS);
+      }
     };
     poll();
-    // ponytail: a full read every second per player; switch to server-sent events if tables get busy
-    const interval = setInterval(poll, POLL_MS);
     return () => {
       mounted = false;
-      clearInterval(interval);
+      clearTimeout(next);
     };
   }, [code]);
 
   useTableSounds(view?.game ?? null, view?.you ?? -1, muted);
+
+  // Seated, you leave with the Stand button only; a reload finds your seat again with the token in this browser.
+  const seated = (view?.you ?? -1) >= 0;
+  useLeaveGuard(seated && !standing, () => setStanding(true));
 
   const send = async (body: object) => {
     setBusy(true);
@@ -107,7 +153,7 @@ export function FriendTable() {
         body: JSON.stringify(body),
       });
       if (reply.token) {
-        localStorage.setItem(tokenKey(code), reply.token);
+        saveToken(code, reply.token);
       }
       show(reply.view);
     } catch (e) {
@@ -117,6 +163,34 @@ export function FriendTable() {
     }
   };
   const onAct = (action: SeatAction) => send({ op: "act", action });
+  const askToStand = () => {
+    setStandError("");
+    setStanding(true);
+  };
+  const standUp = async () => {
+    setBusy(true);
+    try {
+      await fetchJson(`/api/tables/${code}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-table-token": readToken(code) },
+        body: JSON.stringify({ op: "stand" }),
+      });
+      forgetToken(code);
+      router.push("/");
+    } catch (e) {
+      setStandError((e as Error).message);
+      setBusy(false);
+    }
+  };
+  const standDialog = standing && (
+    <StandDialog
+      detail="You leave the table and your chips go with you. If you're in a hand, you fold."
+      busy={busy}
+      error={standError}
+      onStand={standUp}
+      onStay={() => setStanding(false)}
+    />
+  );
   const join = (e: FormEvent) => {
     e.preventDefault();
     send({ op: "join", name: name || session?.user.name }); // defaults to your account name
@@ -231,7 +305,11 @@ export function FriendTable() {
           )}
           {me !== 0 && <p className="text-cream/75">Waiting for {view.names[0]} to deal…</p>}
         </div>
+        <button onClick={askToStand} className="mt-6 text-sm text-cream/70 underline hover:text-cream">
+          Stand up and leave
+        </button>
         {errorMessage}
+        {standDialog}
       </Shell>
     );
   }
@@ -246,6 +324,7 @@ export function FriendTable() {
   return (
     <main className="flex min-h-dvh flex-col">
       <TableHeader
+        onHome={askToStand}
         stack={mine.stack.toLocaleString()}
         status={
           <>
@@ -256,6 +335,7 @@ export function FriendTable() {
         <HeaderButton label={copied ? "Invite link copied" : "Copy invite link"} icon="link" onClick={copyInvite} />
         <HeaderButton label={muted ? "Turn sound on" : "Mute sound"} icon={muted ? "muted" : "sound"} onClick={toggleMute} />
         <HeaderButton label="Who's up" icon="stats" onClick={() => setShowStats(!showStats)} pressed={showStats} />
+        <HeaderButton label="Stand up and leave" icon="stand" onClick={askToStand} />
       </TableHeader>
 
       {(error || stuck) && (
@@ -282,12 +362,13 @@ export function FriendTable() {
               REBUY {view.stack.toLocaleString()}
             </button>
           )}
-          {myTurn && timer && <ActionBar game={game} deadline={timer.deadline} onAct={onAct} onTick={tick} />}
+          {myTurn && timer && <ActionBar game={game} deadline={timer.deadline} onAct={onAct} onTick={tick} hotkeys={!standing} />}
         </div>
       )}
 
       {showStats && <StatsPanel game={game} labels={labels} />}
       <LogPanel entries={logEntriesFor(game)} open={showLog} onToggle={() => setShowLog(!showLog)} hidden={myTurn} yourTurn={yourTurnLine(game, me)} />
+      {standDialog}
     </main>
   );
 }
