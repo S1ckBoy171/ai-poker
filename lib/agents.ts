@@ -1,9 +1,9 @@
 // Server-only: calls to an agent's provider (Anthropic, OpenAI or OpenRouter) with the account's key.
 import Anthropic from "@anthropic-ai/sdk";
-import type { Agent } from "./config.ts";
+import { AI_CALL_MS, type Agent } from "./config.ts";
 import { system as botSystemPrompt } from "./poker.ts";
 
-export type AgentCall = { agent: Agent; key: string; prompt: string; signal: AbortSignal };
+export type AgentCall = { agent: Agent; key: string; prompt: string; signal: AbortSignal; timeoutMs?: number }; // timeoutMs: AI_CALL_MS unless given
 
 /** One turn of a conversation with a model. A conversation starts with the user. */
 export type ChatMessage = { role: "user" | "assistant"; content: string };
@@ -22,6 +22,7 @@ export type ModelRequest = {
 
 const MAX_TOKENS = 16000;
 const SCHEMA_NAME = "poker_move";
+const RETRY_AFTER_MS = 1000; // a busy provider gets a moment before the one retry
 
 /** The HTTP status a provider answered a failed request with, if there was one. */
 export function errorStatus(error: unknown): number | undefined {
@@ -38,20 +39,55 @@ export function isKeyRejected(error: unknown): boolean {
   return status === 401 || status === 403;
 }
 
+/** Worth asking once more: the provider was busy (429) or failed on its side (5xx). */
+export function isRetryable(error: unknown): boolean {
+  const status = errorStatus(error);
+  return status === 429 || (status !== undefined && status >= 500);
+}
+
 /** True when Claude declined to answer (stop reason "refusal") instead of the request failing. */
 export function isRefusal(error: unknown): boolean {
   return (error as { refused?: unknown } | null)?.refused === true;
 }
 
-/** The agent's reply text to one prompt, as the Bots table asks it. A failed request throws the provider's error. */
-export function askAgent(call: AgentCall): Promise<string> {
-  return askModel({
-    agent: call.agent,
-    key: call.key,
-    system: botSystemPrompt(call.agent.name),
-    messages: [{ role: "user", content: call.prompt }],
-    signal: call.signal,
-  });
+/**
+ * The agent's reply text to one prompt, as the Bots table asks it. A busy or failing provider is asked once more,
+ * and the whole turn gets `timeoutMs` (AI_CALL_MS by default). A failed request throws the provider's error; running
+ * out of time throws "no answer within N s".
+ */
+export async function askAgent(call: AgentCall): Promise<string> {
+  const timeoutMs = call.timeoutMs ?? AI_CALL_MS;
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), timeoutMs);
+  const signal = AbortSignal.any([call.signal, deadline.signal]);
+  const ask = () =>
+    askModel({
+      agent: call.agent,
+      key: call.key,
+      system: botSystemPrompt(call.agent.name),
+      messages: [{ role: "user", content: call.prompt }],
+      signal,
+    });
+
+  try {
+    try {
+      return await ask();
+    } catch (error) {
+      if (!isRetryable(error) || signal.aborted) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, RETRY_AFTER_MS));
+      return await ask();
+    }
+  } catch (error) {
+    const outOfTime = deadline.signal.aborted && !call.signal.aborted;
+    if (outOfTime) {
+      throw new Error(`no answer within ${timeoutMs / 1000} s`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** The model's reply text. A failed request throws the provider's error, carrying its HTTP status. */

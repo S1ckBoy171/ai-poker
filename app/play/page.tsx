@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { authClient } from "@/lib/auth-client";
-import { PROVIDERS, type Config } from "@/lib/config";
+import { AI_CALL_MS, PROVIDERS, type Config } from "@/lib/config";
 import { fetchJson } from "@/lib/fetch-json";
 import {
   act,
@@ -44,6 +44,8 @@ type Decision = AgentReply & { error?: string };
 type TurnNote = { seat?: number; say?: string; error?: string };
 
 const IDLE_MS = 5 * 60_000; // while you play: no clicks/keys for this long = you're away, stop paying for AI turns
+const WATCH_HANDS = 100; // an AI vs AI match stops after this many hands, until you choose to keep watching
+const AI_REPLY_GRACE_MS = 10_000; // the server gives up on an AI turn after AI_CALL_MS; the page waits this much longer
 const TURN_MS = { fast: 15_000, normal: 30_000 }; // your time to act before an automatic check (or fold)
 const NEXT_HAND_MS = { fast: 3000, normal: 5500 }; // the result stays up this long
 const MIN_AI_TURN_MS = { fast: 400, normal: 1200 }; // even instant answers take this long, so the table is readable
@@ -56,7 +58,7 @@ const isHuman = (config: Config, seat: number) => config.playing && seat === 0;
 
 /**
  * Only a table you sit at can be paused. When you watch the AIs play each other (an AI vs AI match), nobody's turn
- * waits on you, so the match runs on until it ends.
+ * waits on you, so the match runs on, stopping only every WATCH_HANDS hands for you to choose to keep watching.
  */
 const canPause = (config: Config) => config.playing;
 
@@ -149,7 +151,7 @@ async function decide(game: Game, signal: AbortSignal): Promise<Decision> {
   try {
     const { text } = await fetchJson<{ text: string }>("/api/agent", {
       method: "POST",
-      signal,
+      signal: AbortSignal.any([signal, AbortSignal.timeout(AI_CALL_MS + AI_REPLY_GRACE_MS)]),
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ seat: game.turn, prompt: describe(game) }),
     });
@@ -187,6 +189,7 @@ export default function PlayPage() {
   const [now, setNow] = useState(0);
   const [log, setLog] = useState<Entry[]>([]);
   const [paused, setPaused] = useState<string | null>(null); // why the game is paused ("" = by hand), null = running
+  const [watchFrom, setWatchFrom] = useState(0); // an AI vs AI match: the first hand of this stretch of watching
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [showStats, setShowStats] = useState(false);
@@ -205,12 +208,17 @@ export default function PlayPage() {
     }
   };
   const restart = (config: Config) => {
+    const game = freshGame(config);
     setLog([]);
-    commit(null, freshGame(config));
+    setWatchFrom(game.hand);
+    commit(null, game);
   };
   const resume = () => {
     setPaused(null);
     setTurnAt(Date.now()); // the clock restarts for whoever is to act
+    if (game) {
+      setWatchFrom(game.hand + 1); // watching: another WATCH_HANDS hands, from the next deal, before the next stop
+    }
   };
   const humanAct = (action: Action) => {
     if (game) {
@@ -234,9 +242,12 @@ export default function PlayPage() {
         setHints(keys);
         const saved = account ? readSavedMatch(account, config) : null;
         if (!saved) {
-          commitFromEffect(null, freshGame(config));
+          const game = freshGame(config);
+          setWatchFrom(game.hand);
+          commitFromEffect(null, game);
           return;
         }
+        setWatchFrom(saved.game.hand);
         setGame(saved.game);
         setLog(saved.log);
         setTurnAt(Date.now()); // whoever is to act gets a fresh clock
@@ -283,6 +294,11 @@ export default function PlayPage() {
           setPaused(`No activity for ${IDLE_MS / 60_000} minutes`);
           return;
         }
+        const handsWatched = game.hand - watchFrom + 1;
+        if (!cfg.playing && handsWatched >= WATCH_HANDS) {
+          setPaused(`${WATCH_HANDS} hands played. Resume to keep watching (every AI turn is a paid call)`);
+          return;
+        }
         commitFromEffect(game, dealNextHand(game, cfg));
       }, NEXT_HAND_MS[cfg.speed]);
       return () => clearTimeout(timer);
@@ -305,7 +321,7 @@ export default function PlayPage() {
       })
       .catch(() => {}); // aborted: settings changed, paused, or unmounted
     return () => request.abort();
-  }, [game, cfg, paused]);
+  }, [game, cfg, paused, watchFrom]);
 
   // Your turn runs out: act for you and pause.
   useEffect(() => {

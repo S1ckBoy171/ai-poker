@@ -62,6 +62,8 @@ export const MAX_SEATS = 9;
 export const EFFORTS: Effort[] = ["default", "low", "medium", "high"];
 
 /** The turn-time choices for a match, in seconds: 5 s (quick match) up to 5 minutes. */
+/** The longest one bot-table AI turn may take on the server, its one retry included; then the house bot plays it. */
+export const AI_CALL_MS = 60_000;
 export const TURN_SECONDS = [5, 10, 15, 30, 60, 90, 120, 180, 300];
 export const isTurnSeconds = (value: unknown): value is number => typeof value === "number" && TURN_SECONDS.includes(value);
 

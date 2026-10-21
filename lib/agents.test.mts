@@ -1,7 +1,7 @@
 // Run: npm test
 import assert from "node:assert/strict";
 import { afterEach, describe, test } from "node:test";
-import { askModel, errorStatus, isKeyRejected, isRefusal, type ModelRequest } from "./agents.ts";
+import { askAgent, askModel, errorStatus, isKeyRejected, isRefusal, isRetryable, type AgentCall, type ModelRequest } from "./agents.ts";
 
 // No real provider is called: fetch is replaced, and each test answers the way that provider would.
 type SentRequest = { url: string; body: Record<string, unknown> };
@@ -115,5 +115,62 @@ describe("provider failures", () => {
     const error = await askModel(request("anthropic")).catch((e: unknown) => e);
     assert.equal(isRefusal(error), true);
     assert.equal(errorStatus(error), undefined);
+  });
+});
+
+describe("a Bots-table turn", () => {
+  /** Answer each request in turn with the next of these [status, reply] pairs. */
+  function answerInTurn(...answers: [number, unknown][]) {
+    globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      sent.push({ url, body: JSON.parse(String(init?.body ?? "{}")) });
+      const [status, reply] = answers[sent.length - 1] ?? answers.at(-1)!;
+      return new Response(JSON.stringify(reply), { status, headers: { "content-type": "application/json" } });
+    };
+  }
+
+  const turn = (options: Partial<AgentCall> = {}): AgentCall => ({
+    agent: { name: "Bot", provider: "openai", model: "some-model", effort: "default" },
+    key: "test-key",
+    prompt: "Your turn.",
+    signal: new AbortController().signal,
+    ...options,
+  });
+
+  test("busy (429) and server errors (5xx) are worth a retry; the request's own mistakes are not", () => {
+    for (const status of [429, 500, 503]) {
+      assert.equal(isRetryable(Object.assign(new Error("x"), { status })), true, String(status));
+    }
+    for (const status of [400, 401, 404]) {
+      assert.equal(isRetryable(Object.assign(new Error("x"), { status })), false, String(status));
+    }
+    assert.equal(isRetryable(new Error("no status")), false);
+  });
+
+  test("a busy provider is asked once more", async () => {
+    answerInTurn([429, { error: { message: "slow down" } }], [200, OPENAI_REPLY]);
+    assert.equal(await askAgent(turn()), '{"action":"call"}');
+    assert.equal(sent.length, 2);
+  });
+
+  test("only once: a second failure is the turn's error", async () => {
+    answerInTurn([503, { error: { message: "overloaded" } }]);
+    const error = await askAgent(turn()).catch((e: unknown) => e);
+    assert.equal(errorStatus(error), 503);
+    assert.equal(sent.length, 2);
+  });
+
+  test("a bad request isn't retried", async () => {
+    answerInTurn([400, { error: { message: "unknown model" } }]);
+    const error = await askAgent(turn()).catch((e: unknown) => e);
+    assert.equal((error as Error).message, "unknown model");
+    assert.equal(sent.length, 1);
+  });
+
+  test("a provider that never answers runs out of time", async () => {
+    globalThis.fetch = (_input: string | URL | Request, init?: RequestInit) =>
+      new Promise((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)));
+    const error = await askAgent(turn({ timeoutMs: 50 })).catch((e: unknown) => e);
+    assert.equal((error as Error).message, "no answer within 0.05 s");
   });
 });
