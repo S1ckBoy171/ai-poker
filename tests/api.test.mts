@@ -542,33 +542,33 @@ describe("hand history", () => {
 });
 
 describe("friend tables", () => {
-  type Created = ErrorBody & { code: string; token: string };
-  type Joined = ErrorBody & { token: string; view: TableView };
+  type Created = ErrorBody & { code: string };
   type Acted = ErrorBody & { view: TableView };
-  let anaCookie = "";
-  let benCookie = "";
+  /** Each player is an account (its session cookie): a seat belongs to the account that took it. */
+  let ana = "";
+  let ben = "";
+  let visitor = "";
 
-  const createTable = (body: object) => request<Created>("/api/tables", { cookie: anaCookie, body });
-  const readTable = (code: string, token = "") =>
-    request<TableView & ErrorBody>(`/api/tables/${code}`, { cookie: anaCookie, headers: { "x-table-token": token } });
-  const postTable = <Body,>(code: string, token: string, body: object) =>
-    request<Body & ErrorBody>(`/api/tables/${code}`, { cookie: benCookie, body, headers: { "x-table-token": token } });
-  const join = (code: string, name: string, token = "") => postTable<Joined>(code, token, { op: "join", name });
-  const deal = (code: string, token: string) => postTable<Acted>(code, token, { op: "deal" });
-  const act = (code: string, token: string, action: object) => postTable<Acted>(code, token, { op: "act", action });
-  const stand = (code: string, token: string) => postTable<ErrorBody & { ok: boolean }>(code, token, { op: "stand" });
+  const createTable = (body: object, by = ana) => request<Created>("/api/tables", { cookie: by, body });
+  const readTable = (code: string, by = visitor) => request<TableView & ErrorBody>(`/api/tables/${code}`, { cookie: by });
+  const postTable = <Body,>(code: string, by: string, body: object) => request<Body & ErrorBody>(`/api/tables/${code}`, { cookie: by, body });
+  const join = (code: string, by: string, name: string) => postTable<Acted>(code, by, { op: "join", name });
+  const deal = (code: string, by: string) => postTable<Acted>(code, by, { op: "deal" });
+  const act = (code: string, by: string, action: object) => postTable<Acted>(code, by, { op: "act", action });
+  const stand = (code: string, by: string) => postTable<ErrorBody & { ok: boolean }>(code, by, { op: "stand" });
 
   /** A dealt heads-up table: Ana hosts in seat 0, Ben sits in seat 1. */
   async function headsUpTable(stack = 500) {
     const { body: created } = await createTable({ name: "Ana", stack, bb: 20 });
-    const { body: joined } = await join(created.code, "Ben");
-    const { body: dealt } = await deal(created.code, created.token);
-    return { code: created.code, tokens: [created.token, joined.token], view: dealt.view };
+    await join(created.code, ben, "Ben");
+    const { body: dealt } = await deal(created.code, ana);
+    return { code: created.code, players: [ana, ben], view: dealt.view };
   }
 
   before(async () => {
-    anaCookie = await newSession("Ana");
-    benCookie = await newSession("Ben");
+    ana = await newSession("Ana");
+    ben = await newSession("Ben");
+    visitor = await newSession("Visitor");
   });
 
   test("creating a table needs a name; chips and blinds are kept in range", async () => {
@@ -578,100 +578,105 @@ describe("friend tables", () => {
 
     const defaults = await createTable({ name: "Ana" });
     assert.equal(defaults.status, 200);
-    const defaultView = (await readTable(defaults.body.code, defaults.body.token)).body;
+    const defaultView = (await readTable(defaults.body.code, ana)).body;
     assert.equal(defaultView.bb, 20);
     assert.equal(defaultView.stack, 1000);
 
     const clamped = await createTable({ name: "Ana", stack: 5, bb: 1 });
-    const clampedView = (await readTable(clamped.body.code, clamped.body.token)).body;
+    const clampedView = (await readTable(clamped.body.code, ana)).body;
     assert.equal(clampedView.bb, 2);
     assert.equal(clampedView.stack, 20, "at least ten big blinds");
   });
 
   test("standing up: out of a hand you leave at once; in a hand you fold now if it is your turn and leave when it ends", async () => {
     const lobby = (await createTable({ name: "Ana" })).body;
-    const benInLobby = (await join(lobby.code, "Ben")).body.token;
-    assert.equal((await stand(lobby.code, benInLobby)).status, 200);
-    assert.deepEqual((await readTable(lobby.code, lobby.token)).body.names, ["Ana"]);
-    assert.equal((await stand(lobby.code, benInLobby)).status, 403, "gone: the old token holds no seat");
+    await join(lobby.code, ben, "Ben");
+    assert.equal((await stand(lobby.code, ben)).status, 200);
+    assert.deepEqual((await readTable(lobby.code, ana)).body.names, ["Ana"]);
+    assert.equal((await stand(lobby.code, ben)).status, 403, "gone: Ben holds no seat any more");
 
     // Heads-up, Ana is on the button and posts the small blind, so she acts first preflop.
-    const { code, tokens, view } = await headsUpTable();
+    const { code, view } = await headsUpTable();
     assert.equal(view.game?.turn, 0);
-    assert.equal((await stand(code, tokens[1])).status, 200, "Ben stands while it's Ana's turn");
-    const stillSeated = (await readTable(code, tokens[0])).body;
+    assert.equal((await stand(code, ben)).status, 200, "Ben stands while it's Ana's turn");
+    const stillSeated = (await readTable(code, ana)).body;
     assert.deepEqual(stillSeated.names, ["Ana", "Ben"], "Ben stays until the hand is over");
-    const benActs = await act(code, tokens[1], { type: "call" });
+    const benActs = await act(code, ben, { type: "call" });
     assert.equal(benActs.status, 409);
     assert.equal(benActs.body.error, "You've stood up from this table.");
 
-    await act(code, tokens[0], { type: "call" }); // Ben's turn now: he folds at once and leaves
-    const after = (await readTable(code, tokens[0])).body;
+    await act(code, ana, { type: "call" }); // Ben's turn now: he folds at once and leaves
+    const after = (await readTable(code, ana)).body;
     assert.deepEqual(after.names, ["Ana"]);
     assert.equal(after.game?.players.length, 1);
     assert.equal(after.game?.street, "done");
   });
 
-  test("host, visitors and joining", async () => {
+  test("host, visitors and joining: one seat per account, found again on every visit", async () => {
     const created = await createTable({ name: "Ana", stack: 500, bb: 20 });
     assert.equal(created.status, 200);
-    const { code, token: anaToken } = created.body;
+    const { code } = created.body;
     assert.match(code, /^[0-9a-f]{8}$/);
 
-    const host = (await readTable(code, anaToken)).body;
+    const host = (await readTable(code, ana)).body;
     assert.equal(host.you, 0);
+    assert.equal(host.host, 0);
     assert.deepEqual(host.names, ["Ana"]);
     assert.equal(host.game, null);
     assert.equal(host.stack, 500);
 
-    assert.equal((await readTable(code)).body.you, -1, "no token: you see the lobby without a seat");
+    assert.equal((await readTable(code)).body.you, -1, "not seated: you see the lobby without a seat");
 
-    const ben = await join(code, "Ben");
-    assert.equal(ben.status, 200);
-    assert.equal(ben.body.view.you, 1);
-    assert.deepEqual(ben.body.view.names, ["Ana", "Ben"]);
+    const joined = await join(code, ben, "Ben");
+    assert.equal(joined.status, 200);
+    assert.equal(joined.body.view.you, 1);
+    assert.deepEqual(joined.body.view.names, ["Ana", "Ben"]);
+    assert.equal((await readTable(code, ben)).body.you, 1, "Ben's account finds his seat");
 
-    const twice = await join(code, "Ben again", ben.body.token);
+    const twice = await join(code, ben, "Ben again");
     assert.equal(twice.status, 409);
     assert.equal(twice.body.error, "You're already at this table.");
-    assert.equal((await join(code, "  ")).status, 400);
+    const hostTwice = await join(code, ana, "Ana's friend");
+    assert.equal(hostTwice.status, 409, "the host can't take a second seat either");
+    assert.deepEqual((await readTable(code, ana)).body.names, ["Ana", "Ben"]);
+    assert.equal((await join(code, visitor, "  ")).status, 400);
   });
 
   test("only the host deals, once, and not alone", async () => {
     const solo = (await createTable({ name: "Ana" })).body;
-    const alone = await deal(solo.code, solo.token);
+    const alone = await deal(solo.code, ana);
     assert.equal(alone.status, 409);
     assert.equal(alone.body.error, "Wait for at least one friend to join.");
 
-    const { code, token: anaToken } = (await createTable({ name: "Ana" })).body;
-    const benToken = (await join(code, "Ben")).body.token;
-    const early = await act(code, anaToken, { type: "check" });
+    const { code } = (await createTable({ name: "Ana" })).body;
+    await join(code, ben, "Ben");
+    const early = await act(code, ana, { type: "check" });
     assert.equal(early.status, 409);
     assert.equal(early.body.error, "The game hasn't started yet.");
 
-    const notHost = await deal(code, benToken);
+    const notHost = await deal(code, ben);
     assert.equal(notHost.status, 403);
     assert.equal(notHost.body.error, "Only the host can deal.");
 
-    const dealt = await deal(code, anaToken);
+    const dealt = await deal(code, ana);
     assert.equal(dealt.status, 200);
     assert.equal(dealt.body.view.game?.hand, 1);
     assert.equal(dealt.body.view.game?.street, "preflop");
 
-    const again = await deal(code, anaToken);
+    const again = await deal(code, ana);
     assert.equal(again.status, 409);
     assert.equal(again.body.error, "The game has already started.");
 
-    const stranger = await act(code, "", { type: "check" });
+    const stranger = await act(code, visitor, { type: "check" });
     assert.equal(stranger.status, 403);
     assert.equal(stranger.body.error, "You're not seated at this table.");
   });
 
   test("a hand from deal to showdown, the next deal, and the turn clock", async () => {
-    const { code, tokens } = await headsUpTable(1000);
+    const { code, players } = await headsUpTable(1000);
 
-    const anaView = (await readTable(code, tokens[0])).body;
-    const benView = (await readTable(code, tokens[1])).body;
+    const anaView = (await readTable(code, ana)).body;
+    const benView = (await readTable(code, ben)).body;
     const anaGame = anaView.game;
     const benGame = benView.game;
     assert(anaGame && benGame);
@@ -683,18 +688,18 @@ describe("friend tables", () => {
     assert.equal(anaView.turnMs, 30_000);
     assert(anaView.turnMsLeft > 0 && anaView.turnMsLeft <= 30_000);
 
-    const waiting = tokens[1 - anaGame.turn];
+    const waiting = players[1 - anaGame.turn];
     const outOfTurn = await act(code, waiting, { type: "call" });
     assert.equal(outOfTurn.status, 409);
     assert.equal(outOfTurn.body.error, "It's not your turn.");
-    const unknown = await act(code, tokens[anaGame.turn], { type: "dance" });
+    const unknown = await act(code, players[anaGame.turn], { type: "dance" });
     assert.equal(unknown.status, 400);
     assert.equal(unknown.body.error, "bad request");
-    assert.equal((await postTable(code, tokens[0], { op: "shuffle" })).status, 400);
+    assert.equal((await postTable(code, ana, { op: "shuffle" })).status, 400);
 
     let game = anaGame;
     for (let step = 0; step < 20 && game.street !== "done"; step++) {
-      const reply = await act(code, tokens[game.turn], { type: "call" });
+      const reply = await act(code, players[game.turn], { type: "call" });
       assert.equal(reply.status, 200, reply.text);
       assert(reply.body.view.game);
       game = reply.body.view.game;
@@ -705,11 +710,11 @@ describe("friend tables", () => {
       game.players.reduce((sum, player) => sum + player.stack, 0),
       2000,
     );
-    const benAtShowdown = (await readTable(code, tokens[1])).body.game;
+    const benAtShowdown = (await readTable(code, ben)).body.game;
     assert(benAtShowdown?.players.every((player) => player.cards.every(Boolean)), "showdown cards are face up for everyone");
 
     await sleep(5_500);
-    const next = (await readTable(code, tokens[1])).body.game;
+    const next = (await readTable(code, ben)).body.game;
     assert(next);
     assert.equal(next.hand, 2, "the next hand deals itself about 5 s later");
     assert.equal(next.street, "preflop");
@@ -717,22 +722,57 @@ describe("friend tables", () => {
     const historyBefore = next.history.length;
     const slowSeat = next.turn;
     await sleep(31_000);
-    const afterTimeout = (await readTable(code, tokens[0])).body;
+    const afterTimeout = (await readTable(code, ana)).body;
     const timedOutLine = afterTimeout.game?.history[historyBefore] ?? "";
     assert(timedOutLine.includes(afterTimeout.names[slowSeat]), `the clock acted for the slow player: "${timedOutLine}"`);
     assert.match(timedOutLine, / (checks|folds)$/);
+    assert(!afterTimeout.game?.players[slowSeat].sittingOut, "one missed turn doesn't sit you out");
+  });
+
+  test("sitting out: dealt out of the next hands until you're back", async () => {
+    const created = (await createTable({ name: "Ana", stack: 500, bb: 20 })).body;
+    const cy = await newSession("Cy");
+    await join(created.code, ben, "Ben");
+    await join(created.code, cy, "Cy");
+    await deal(created.code, ana);
+    const code = created.code;
+
+    const out = await act(code, cy, { type: "sitOut" });
+    assert.equal(out.status, 200, out.text);
+    const cySeat = out.body.view.you;
+    assert.equal(out.body.view.game?.players[cySeat].sittingOut, true);
+
+    // Play the hand out; when it's Cy's turn the table checks or folds for her at once.
+    // Who sits where: seat numbers follow the chairs, not the order people joined.
+    const playerAt = new Map<number, string>();
+    for (const cookie of [ana, ben, cy]) {
+      playerAt.set((await readTable(code, cookie)).body.you, cookie);
+    }
+    let game: TableView["game"] = out.body.view.game;
+    for (let step = 0; step < 20 && game && game.street !== "done"; step++) {
+      assert.notEqual(game.turn, cySeat, "nobody waits for a player sitting out");
+      game = (await act(code, playerAt.get(game.turn) ?? "", { type: "call" })).body.view.game;
+    }
+    await sleep(5_500);
+    const nextHand = (await readTable(code, ana)).body.game;
+    assert.equal(nextHand?.hand, 2);
+    assert.deepEqual(nextHand?.players[cySeat].cards, [], "Cy isn't dealt in");
+
+    const back = await act(code, cy, { type: "sitIn" });
+    assert.equal(back.status, 200, back.text);
+    assert.equal(back.body.view.game?.players[cySeat].sittingOut, false, "back: dealt in from the next hand");
   });
 
   test("late joiners sit out until the next hand; nine seats at most; names stay unique", async () => {
-    const { code, tokens } = await headsUpTable();
+    const { code } = await headsUpTable();
     for (const name of ["Ana", "C", "D", "E", "F", "G", "H"]) {
-      assert.equal((await join(code, name)).status, 200, name);
+      assert.equal((await join(code, await newSession(name), name)).status, 200, name);
     }
-    const full = await join(code, "J");
+    const full = await join(code, visitor, "J");
     assert.equal(full.status, 409);
     assert.equal(full.body.error, "This table is full.");
 
-    const view = (await readTable(code, tokens[0])).body;
+    const view = (await readTable(code, ana)).body;
     // Seats run clockwise and each newcomer takes a chair well apart from the others, so they sit between earlier players.
     assert.deepEqual(view.names, ["Ana", "G", "Ana 2", "E", "D", "Ben", "F", "C", "H"]);
     const lateJoiners = view.game?.players.filter((player) => player.name !== "Ana" && player.name !== "Ben");
@@ -741,21 +781,21 @@ describe("friend tables", () => {
   });
 
   test("rebuys: only once you're out of chips", async () => {
-    const { code, tokens } = await headsUpTable(500);
-    const tooEarly = await act(code, tokens[0], { type: "rebuy" });
+    const { code, players } = await headsUpTable(500);
+    const tooEarly = await act(code, ana, { type: "rebuy" });
     assert.equal(tooEarly.status, 409);
     assert.equal(tooEarly.body.error, "You can rebuy once you're out of chips.");
 
     let busted = -1;
     for (let hand = 0; hand < 5 && busted < 0; hand++) {
-      let game = (await readTable(code, tokens[0])).body.game;
+      let game = (await readTable(code, ana)).body.game;
       assert(game);
-      await act(code, tokens[game.turn], { type: "raise", amount: 1e9 });
-      game = (await readTable(code, tokens[0])).body.game;
+      await act(code, players[game.turn], { type: "raise", amount: 1e9 });
+      game = (await readTable(code, ana)).body.game;
       assert(game);
       if (game.street !== "done") {
-        await act(code, tokens[game.turn], { type: "call" });
-        game = (await readTable(code, tokens[0])).body.game;
+        await act(code, players[game.turn], { type: "call" });
+        game = (await readTable(code, ana)).body.game;
         assert(game);
       }
       busted = game.players.findIndex((player) => player.stack === 0);
@@ -765,7 +805,7 @@ describe("friend tables", () => {
     }
     assert(busted >= 0, "someone busted");
 
-    const rebuy = await act(code, tokens[busted], { type: "rebuy" });
+    const rebuy = await act(code, players[busted], { type: "rebuy" });
     assert.equal(rebuy.status, 200, rebuy.text);
     const player = rebuy.body.view.game?.players[busted];
     assert.equal(player?.stack, 500);

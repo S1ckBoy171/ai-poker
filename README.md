@@ -39,13 +39,17 @@ Bot-match settings, API keys and hand history belong to one account each: nobody
 
 Keys and settings are saved in Postgres (`settings` and `api_keys` tables, keys in plaintext). Keys never go back to the browser: the UI only sees masked hints, and `/api/agent` looks up the key for the seat on the server. Seats without a working key are played by a simple house bot, and the error shows in **Table talk**.
 
-You leave a table only with the **Stand up** button (door icon): Back, the home link and closing or reloading the tab ask first, and a reload or a reopened tab carries on with the same game (bot matches are kept in the browser per account; friend tables find your seat again with the token in your browser). At a friend table, standing up mid-hand folds you when your turn comes and you leave when the hand ends.
+You leave a table only with the **Stand up** button (door icon): Back, the home link and closing or reloading the tab ask first, and a reload or a reopened tab carries on with the same game (bot matches are kept in the browser per account; friend tables find your seat again from your account, on any device). At a friend table, standing up mid-hand folds you when your turn comes and you leave when the hand ends.
 
 Switching tabs or windows doesn't pause the game. When you play, the **Pause** button stops the AIs, and since every AI turn is a paid API call the game also pauses itself when your turn timer runs out, and before a new hand after 5 minutes with no clicks or key presses (`IDLE_MS` in `app/play/page.tsx`). When you only watch (an AI vs AI match) there is no pause: the match plays on until it ends, so turn on Auto Re-Buy only if you mean to keep paying for it. Friend tables can't be paused either.
 
 ## Friend tables (`/t/<code>`)
 
-The server owns the game (`tables` table). Each player gets a secret token, kept in their browser, and only ever receives their own hole cards; everyone's shown cards appear at showdown. Players poll the table every second. A turn times out after 30 seconds (check, or fold when you owe chips), and the next hand deals itself 5 seconds after the last one. Up to 9 players; late joiners play from the next hand; busted players can rebuy.
+The server owns the game (`tables` table). Each account gets one seat at a table, and each player only ever receives their own hole cards; everyone's shown cards appear at showdown. The shuffle uses the cryptographic random source (Web Crypto). Players poll the table every second. A turn times out after 30 seconds (check, or fold when you owe chips), and the next hand deals itself 5 seconds after the last one. Up to 9 players; late joiners play from the next hand; busted players can rebuy.
+
+The host (who created the table) deals the first hand. If the host hasn't had the table open for 20 seconds, the next player who has takes over the deal.
+
+Two missed turns in a row sit you out as away: you aren't dealt in (and post no blinds) until you press **I'm back**. You can also sit out on purpose with the pause button. When one player has every chip, a **Game over** screen shows the standings; the game carries on if anyone who is out rebuys.
 
 To play with friends on other devices, the server must be reachable by them:
 
@@ -63,7 +67,7 @@ npm run friends   # listens on all interfaces; friends open http://<your-ip>:300
 - `lib/turn-rules.ts`, `lib/strict-turn.ts`: strict turns for built agents (legal options, briefing, answer schema, the check, retry with the reason until valid, out of time or 20 calls)
 - `lib/agents.ts`: provider calls (Anthropic, OpenAI, OpenRouter) with a conversation and an optional answer schema
 - `lib/built-agents.ts`: saved-agent rules (names, prompts, canvas layout, the chain)
-- `lib/tables.ts`: friend tables (create, join, deal, act, timeouts), stored with an optimistic version lock
+- `lib/tables.ts`: friend tables (create, join, deal, act), stored with an optimistic version lock; `lib/table-rules.ts`: the rules they run on with no database (seats per account, the host, turn timeouts, sitting out, the next deal)
 - `lib/db.ts`, `prisma/`: Prisma client, schema and migrations
 - `lib/auth.ts`, `lib/auth-client.ts`, `lib/hash-accounts.ts`, `proxy.ts`: Better Auth setup, hash-account rules, the login redirect
 - `lib/guard.ts`: session check for every API route; plus same-origin and friends-mode checks for routes that touch API keys

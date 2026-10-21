@@ -16,6 +16,7 @@ export type Player = {
   last?: string; // last action, shown on the seat
   buyIn: number; // total chips brought to the table (start + rebuys + top-offs)
   rebuys: number;
+  sittingOut?: boolean; // away from the table: dealt out of every hand until they come back
 };
 
 export type Winner = { seat: number; amount: number; hand: string; cards: Card[] }; // cards = best five at showdown, [] when everyone else folded
@@ -75,11 +76,21 @@ export function newGame(names: string[], stack: number, bb: number): Game {
   };
 }
 
+/** A whole number from 0 to below `max`, all equally likely, from the cryptographic random source (Web Crypto, in the browser and on the server). */
+function secureRandomBelow(max: number): number {
+  const limit = Math.floor(2 ** 32 / max) * max; // values from here up would make the low results likelier: draw again
+  const draw = new Uint32Array(1);
+  do {
+    crypto.getRandomValues(draw);
+  } while (draw[0] >= limit);
+  return draw[0] % max;
+}
+
 function shuffledDeck(): Card[] {
   const deck = [...RANKS].flatMap((rank) => [...SUITS].map((suit) => rank + suit));
   // Fisher-Yates
   for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = secureRandomBelow(i + 1);
     [deck[i], deck[j]] = [deck[j], deck[i]];
   }
   return deck;
@@ -200,6 +211,12 @@ const countInHand = (game: Game) => game.players.filter(isInHand).length;
 /** How many players have chips to play a hand with. */
 export const playersWithChips = (game: Game) => game.players.filter((player) => player.stack > 0).length;
 
+/** Gets cards next hand: has chips and isn't sitting out. */
+const isDealtIn = (player: Player) => player.stack > 0 && !player.sittingOut;
+
+/** How many players the next hand would be dealt to; it takes two. */
+export const playersReady = (game: Game) => game.players.filter(isDealtIn).length;
+
 /** All chips put in this hand, including bets not yet swept into the pot. */
 export const potTotal = (game: Game) => game.players.reduce((sum, player) => sum + player.committed, 0);
 
@@ -235,7 +252,7 @@ const drawCard = (game: Game): Card => game.deck.pop()!;
 
 export function startHand(previous: Game): Game {
   const game = structuredClone(previous);
-  const seated = playersWithChips(game);
+  const seated = playersReady(game);
   if (seated < 2) {
     return game;
   }
@@ -244,7 +261,7 @@ export function startHand(previous: Game): Game {
     player.bet = 0;
     player.committed = 0;
     player.cards = [];
-    player.folded = player.stack === 0; // no chips: sits this hand out
+    player.folded = !isDealtIn(player); // no chips, or away: sits this hand out
     player.allIn = false;
     player.acted = false;
     player.last = undefined;

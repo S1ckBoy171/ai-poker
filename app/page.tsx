@@ -42,11 +42,6 @@ export default function Home() {
       setFriendError(reply.error ?? "Could not create the table.");
       return;
     }
-    try {
-      localStorage.setItem(`agent-holdem-table:${reply.code}`, reply.token); // your seat's secret, kept in this browser (the table page reads it)
-    } catch {
-      // storage blocked: you can still watch the table, but not play from your seat
-    }
     router.push(`/t/${reply.code}`);
   };
 

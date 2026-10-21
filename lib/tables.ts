@@ -1,28 +1,19 @@
 // Human-only friend tables. The server owns the game; each player only ever receives their own view of it.
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { prisma } from "./db";
 import type { Prisma } from "./generated/prisma/client";
-import { act, addPlayer, legalize, newGame, playersWithChips, removePlayer, startHand, viewFor, type Action, type Game } from "./poker";
+import { act, addPlayer, legalize, newGame, startHand, viewFor, type Action, type Game } from "./poker";
+import { TURN_MS, hostSeat, markSeen, playForAbsentPlayers, runTimers, seatOf, type TableData } from "./table-rules";
 import { joinSeat } from "./table-shape";
 
-export const TURN_MS = 30_000; // time to act before an automatic check (or fold)
-const NEXT_HAND_MS = 5_000; // everyone sees the result before the next deal
 const MAX_SEATS = 9;
 const UPDATE_ATTEMPTS = 5;
 export const CODE = /^[0-9a-f]{8}$/;
 
-type Seat = { name: string; token: string; leaving?: boolean }; // leaving: stood up mid-hand, goes when the hand ends
-type TableData = {
-  stack: number;
-  bb: number;
-  seats: Seat[]; // index = seat, clockwise round the table; seat 0 is the host
-  game: Game | null; // null until the host deals
-  turnAt: number; // when the current turn started, or the last hand ended (epoch ms)
-};
-
 export type TableView = {
   code: string;
   you: number; // your seat, -1 if you haven't joined
+  host: number; // the seat that deals the first hand
   names: string[];
   stack: number;
   bb: number;
@@ -31,8 +22,8 @@ export type TableView = {
   turnMs: number;
 };
 
-/** What a seated player can do: a poker action, or a rebuy once they're out of chips. */
-export type SeatAction = Action | { type: "rebuy" };
+/** What a seated player can do: a poker action, a rebuy once they're out of chips, or sit out and come back. */
+export type SeatAction = Action | { type: "rebuy" } | { type: "sitOut" } | { type: "sitIn" };
 
 /** An expected failure (bad input, not your turn...) with the HTTP status to answer with. */
 type TableError = Error & { status: number };
@@ -57,16 +48,15 @@ const cleanName = (name: unknown) =>
     .replace(/\s+/g, " ")
     .slice(0, 16);
 
-const seatOf = (table: TableData, token: string) => table.seats.findIndex((seat) => seat.token === token);
-
-/** The table as the holder of `token` may see it. */
-function tableViewFor(code: string, table: TableData, token: string): TableView {
-  const you = seatOf(table, token);
+/** The table as this account may see it. */
+function tableViewFor(code: string, table: TableData, userId: string): TableView {
+  const you = seatOf(table, userId);
   const game = table.game;
   const turnRunning = !!game && game.street !== "done";
   return {
     code,
     you,
+    host: hostSeat(table, Date.now()),
     names: table.seats.map((seat) => seat.name),
     stack: table.stack,
     bb: table.bb,
@@ -104,88 +94,39 @@ async function updateTable(code: string, change: (table: TableData) => boolean):
   return fail(409, "The table is busy, try again.");
 }
 
-/**
- * Players who stood up: one whose turn it is folds at once, and between hands (or before the first deal) they leave
- * the table. Returns whether anything changed.
- */
-function seatLeavers(table: TableData, now: number): boolean {
-  let changed = false;
-  for (;;) {
-    const game = table.game;
-    const handRunning = !!game && game.street !== "done";
-    if (game && handRunning && table.seats[game.turn]?.leaving) {
-      table.game = act(game, { type: "fold" });
-      table.turnAt = now;
-      changed = true;
-      continue;
-    }
-    if (handRunning) {
-      return changed;
-    }
-    const leaver = table.seats.findIndex((seat) => seat.leaving);
-    if (leaver < 0) {
-      return changed;
-    }
-    table.seats.splice(leaver, 1);
-    if (table.game) {
-      table.game = removePlayer(table.game, leaver);
-    }
-    changed = true;
-  }
-}
-
-/** Steps nobody clicks for: a turn running out, and the next deal. Runs whenever anyone looks at the table. */
-function runTimers(table: TableData, now: number): boolean {
-  const leaversSeated = seatLeavers(table, now);
-  const game = table.game;
-  if (!game) {
-    return leaversSeated;
-  }
-  const handRunning = game.street !== "done";
-  if (handRunning && now - table.turnAt > TURN_MS) {
-    table.game = act(game, legalize(game, { type: "check" })); // a fold when they owe chips
-    table.turnAt = now;
-    return true;
-  }
-  const nextHandDue = !handRunning && now - table.turnAt > NEXT_HAND_MS;
-  if (nextHandDue && playersWithChips(game) >= 2) {
-    table.game = startHand(game);
-    table.turnAt = now;
-    return true;
-  }
-  return leaversSeated;
-}
-
-export async function createTable(name: unknown, stack: unknown, bb: unknown) {
+export async function createTable(userId: string, name: unknown, stack: unknown, bb: unknown) {
   const host = cleanName(name) || fail(400, "Enter your name.");
   const requestedBb = Math.round(Number(bb)) || 20;
   const bigBlind = Math.min(1_000_000, Math.max(2, requestedBb));
   const requestedStack = Math.round(Number(stack)) || 1000;
   const startingStack = Math.min(100_000_000, Math.max(bigBlind * 10, requestedStack)); // at least 10 big blinds
-  const token = randomUUID();
   const code = randomBytes(4).toString("hex"); // 8-char random hash = the invite code
   // ponytail: no retry on a code collision (1 in 4 billion per table); add one if tables pile up
   const table: TableData = {
     stack: startingStack,
     bb: bigBlind,
-    seats: [{ name: host, token }],
+    seats: [{ name: host, userId, seenAt: Date.now() }],
     game: null,
     turnAt: Date.now(),
   };
   await prisma.table.create({ data: { code, data: table as unknown as Prisma.InputJsonObject } });
-  return { code, token };
+  return { code };
 }
 
-export async function readTable(code: string, token: string) {
-  const table = await updateTable(code, (current) => runTimers(current, Date.now()));
-  return tableViewFor(code, table, token);
-}
-
-export async function joinTable(code: string, token: string, name: unknown) {
-  const wanted = cleanName(name) || fail(400, "Enter your name.");
-  const newToken = randomUUID();
+export async function readTable(code: string, userId: string) {
   const table = await updateTable(code, (current) => {
-    if (seatOf(current, token) >= 0) {
+    const now = Date.now();
+    const seen = markSeen(current, userId, now);
+    const ran = runTimers(current, now);
+    return seen || ran;
+  });
+  return tableViewFor(code, table, userId);
+}
+
+export async function joinTable(code: string, userId: string, name: unknown) {
+  const wanted = cleanName(name) || fail(400, "Enter your name.");
+  const table = await updateTable(code, (current) => {
+    if (seatOf(current, userId) >= 0) {
       fail(409, "You're already at this table.");
     }
     if (current.seats.length >= MAX_SEATS) {
@@ -199,18 +140,18 @@ export async function joinTable(code: string, token: string, name: unknown) {
     }
     // Seat numbers run clockwise, the order of play, so a chair between two players means a seat number between theirs.
     const seat = joinSeat(current.seats.length);
-    current.seats.splice(seat, 0, { name: seatName, token: newToken });
+    current.seats.splice(seat, 0, { name: seatName, userId, seenAt: Date.now() });
     if (current.game) {
       current.game = addPlayer(current.game, seatName, current.stack, seat); // plays from the next hand
     }
     return true;
   });
-  return { token: newToken, view: tableViewFor(code, table, newToken) };
+  return tableViewFor(code, table, userId);
 }
 
-export async function dealFirstHand(code: string, token: string) {
+export async function dealFirstHand(code: string, userId: string) {
   const table = await updateTable(code, (current) => {
-    if (seatOf(current, token) !== 0) {
+    if (seatOf(current, userId) !== hostSeat(current, Date.now())) {
       fail(403, "Only the host can deal.");
     }
     if (current.game) {
@@ -224,12 +165,12 @@ export async function dealFirstHand(code: string, token: string) {
     current.turnAt = Date.now();
     return true;
   });
-  return tableViewFor(code, table, token);
+  return tableViewFor(code, table, userId);
 }
 
-export async function playerAction(code: string, token: string, action: SeatAction) {
+export async function playerAction(code: string, userId: string, action: SeatAction) {
   const table = await updateTable(code, (current) => {
-    const seat = seatOf(current, token);
+    const seat = seatOf(current, userId);
     if (seat < 0) {
       fail(403, "You're not seated at this table.");
     }
@@ -250,29 +191,37 @@ export async function playerAction(code: string, token: string, action: SeatActi
       return true;
     }
 
+    if (action.type === "sitOut" || action.type === "sitIn") {
+      game.players[seat].sittingOut = action.type === "sitOut";
+      current.seats[seat].missedTurns = 0;
+      playForAbsentPlayers(current, Date.now()); // sitting out on your turn plays it at once
+      return true;
+    }
+
     if (game.street === "done" || game.turn !== seat) {
       fail(409, "It's not your turn.");
     }
     current.game = act(game, legalize(game, action));
+    current.seats[seat].missedTurns = 0;
     current.turnAt = Date.now();
-    seatLeavers(current, current.turnAt); // a player who stood up and is next folds at once
+    playForAbsentPlayers(current, current.turnAt); // whoever is next and has stood up or is away plays at once
     return true;
   });
-  return tableViewFor(code, table, token);
+  return tableViewFor(code, table, userId);
 }
 
 /**
  * Stand up: the only way to leave a table. Out of the hand (or between hands) you leave at once; in a hand you fold
  * when your turn comes (straight away if it is now) and leave when the hand ends. Your chips leave with you.
  */
-export async function standUp(code: string, token: string) {
+export async function standUp(code: string, userId: string) {
   await updateTable(code, (current) => {
-    const seat = seatOf(current, token);
+    const seat = seatOf(current, userId);
     if (seat < 0) {
       fail(403, "You're not seated at this table.");
     }
     current.seats[seat].leaving = true;
-    seatLeavers(current, Date.now());
+    playForAbsentPlayers(current, Date.now());
     return true;
   });
 }
