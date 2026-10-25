@@ -503,7 +503,7 @@ type SeatProps = {
 function Seat({ player, label, human, color, thinking, won, bubble, faceUp, winningCards, hand, dealDelay, timer, badgeSide, style }: SeatProps) {
   const sittingOut = !player.cards.length;
   const faded = (player.folded && !won) || sittingOut;
-  const badge = thinking ?? player.last;
+  const badge = thinking ?? (player.sittingOut ? "Away" : player.last);
   const showCards = !player.folded && !sittingOut;
   const cardSpacing = human ? "gap-0.5" : "-space-x-3";
   const cardsHeight = human ? "h-[70px] sm:h-[84px]" : "h-9"; // kept when the cards are gone, so the name plate stays put

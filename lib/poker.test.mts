@@ -14,6 +14,7 @@ import {
   legalize,
   newGame,
   parseReply,
+  playersReady,
   removePlayer,
   startHand,
   system,
@@ -160,6 +161,31 @@ describe("dealing", () => {
     assert.equal(same.street, "done");
     assert.equal(same.hand, 0);
     assert(same.players.every((p) => p.cards.length === 0));
+  });
+
+  test("a player sitting out is dealt out, posts no blind, and isn't counted as ready", () => {
+    const game = newGame(["A", "B", "C"], 1000, 20);
+    game.players[1].sittingOut = true;
+    assert.equal(playersReady(game), 2);
+    const dealt = startHand(game);
+    assert.deepEqual(dealt.players[1].cards, []);
+    assert.deepEqual(
+      dealt.players.map((p) => p.bet),
+      [10, 0, 20],
+    );
+
+    const alone = newGame(["A", "B"], 1000, 20);
+    alone.players[0].sittingOut = true;
+    assert.equal(startHand(alone).hand, 0, "nobody to play against: no deal");
+  });
+
+  test("every shuffle is a full deck in a new order", () => {
+    const decks = new Set<string>();
+    for (let n = 0; n < 50; n++) {
+      const deck = startHand(newGame(["A", "B"], 1000, 20)).deck;
+      decks.add(deck.join(""));
+    }
+    assert.equal(decks.size, 50);
   });
 
   test("a late joiner sits out until the next deal", () => {

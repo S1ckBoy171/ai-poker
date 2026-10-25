@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { authClient } from "@/lib/auth-client";
 import { fetchJson } from "@/lib/fetch-json";
-import { playersWithChips, type Game } from "@/lib/poker";
+import { playersReady, playersWithChips, type Game } from "@/lib/poker";
 import { play } from "@/lib/sound";
 import { seatChair } from "@/lib/table-shape";
 import type { SeatAction, TableView as View } from "@/lib/tables";
@@ -32,36 +32,6 @@ const COPIED_MS = 2000; // how long "LINK COPIED" shows
 
 /** A player's color goes with their chair, so it stays theirs when someone joins and seat numbers shift. */
 const colorFor = (seat: number, playerCount: number) => COLORS[seatChair(seat, playerCount) % COLORS.length];
-
-// Your seat's secret token for this table lives only in this browser. When storage is blocked it is kept in memory,
-// so you stay seated for this visit (a reload can't find your seat again).
-const tokenKey = (code: string) => `agent-holdem-table:${code}`;
-const tokensInMemory = new Map<string, string>();
-function readToken(code: string) {
-  try {
-    return localStorage.getItem(tokenKey(code)) ?? tokensInMemory.get(code) ?? "";
-  } catch {
-    return tokensInMemory.get(code) ?? "";
-  }
-}
-
-function forgetToken(code: string) {
-  tokensInMemory.delete(code);
-  try {
-    localStorage.removeItem(tokenKey(code));
-  } catch {
-    // storage blocked: nothing was saved there
-  }
-}
-
-function saveToken(code: string, token: string) {
-  tokensInMemory.set(code, token);
-  try {
-    localStorage.setItem(tokenKey(code), token);
-  } catch {
-    // storage blocked: the copy in memory keeps you seated
-  }
-}
 
 /** The log for the current hand, rebuilt from its history (ids stay stable as lines are added). */
 function logEntriesFor(game: Game): LogEntry[] {
@@ -117,7 +87,7 @@ export function FriendTable() {
     let next: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       try {
-        const latest = await fetchJson<View>(`/api/tables/${code}`, { headers: { "x-table-token": readToken(code) }, cache: "no-store" });
+        const latest = await fetchJson<View>(`/api/tables/${code}`, { cache: "no-store" });
         if (mounted) {
           showFromPoll(latest);
         }
@@ -140,21 +110,18 @@ export function FriendTable() {
 
   useTableSounds(view?.game ?? null, view?.you ?? -1, muted);
 
-  // Seated, you leave with the Stand button only; a reload finds your seat again with the token in this browser.
+  // Seated, you leave with the Stand button only; a reload, or this table opened on another device, finds your seat again.
   const seated = (view?.you ?? -1) >= 0;
   useLeaveGuard(seated && !standing, () => setStanding(true));
 
   const send = async (body: object) => {
     setBusy(true);
     try {
-      const reply = await fetchJson<{ view: View; token?: string }>(`/api/tables/${code}`, {
+      const reply = await fetchJson<{ view: View }>(`/api/tables/${code}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-table-token": readToken(code) },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (reply.token) {
-        saveToken(code, reply.token);
-      }
       show(reply.view);
     } catch (e) {
       setError((e as Error).message);
@@ -172,10 +139,9 @@ export function FriendTable() {
     try {
       await fetchJson(`/api/tables/${code}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-table-token": readToken(code) },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ op: "stand" }),
       });
-      forgetToken(code);
       router.push("/");
     } catch (e) {
       setStandError((e as Error).message);
@@ -293,17 +259,17 @@ export function FriendTable() {
                 {seatName.slice(0, 2).toUpperCase()}
               </span>
               {seat === me ? `${seatName} (you)` : seatName}
-              {seat === 0 && <span className="text-xs text-cream/50">host</span>}
+              {seat === view.host && <span className="text-xs text-cream/50">host</span>}
             </li>
           ))}
         </ul>
         <div className="mt-8">
-          {me === 0 && (
+          {me === view.host && (
             <button onClick={() => send({ op: "deal" })} disabled={busy || !enoughPlayers} className="btn-gold disabled:opacity-50">
               {enoughPlayers ? "DEAL CARDS" : "WAITING FOR A FRIEND…"}
             </button>
           )}
-          {me !== 0 && <p className="text-cream/75">Waiting for {view.names[0]} to deal…</p>}
+          {me !== view.host && <p className="text-cream/75">Waiting for {view.names[view.host]} to deal…</p>}
         </div>
         <button onClick={askToStand} className="mt-6 text-sm text-cream/70 underline hover:text-cream">
           Stand up and leave
@@ -318,8 +284,13 @@ export function FriendTable() {
   const handOver = game.street === "done";
   const myTurn = !handOver && game.turn === me;
   const busted = mine.stack === 0 && (!mine.cards.length || handOver);
-  const stuck = handOver && playersWithChips(game) < 2;
+  const away = !!mine.sittingOut;
+  // One player has every chip: the game is over unless someone rebuys (then the next hand deals itself).
+  const gameOver = handOver && playersWithChips(game) < 2;
+  const waitingForAway = handOver && !gameOver && playersReady(game) < 2;
   const colors = labels.map((_, seat) => colorFor(seat, labels.length));
+  const winnerSeat = game.players.findIndex((player) => player.stack > 0);
+  const status = error || (waitingForAway && "Waiting for players who are away to come back.") || (away && "You're sitting out. You won't be dealt in until you're back.");
 
   return (
     <main className="flex min-h-dvh flex-col">
@@ -335,12 +306,17 @@ export function FriendTable() {
         <HeaderButton label={copied ? "Invite link copied" : "Copy invite link"} icon="link" onClick={copyInvite} />
         <HeaderButton label={muted ? "Turn sound on" : "Mute sound"} icon={muted ? "muted" : "sound"} onClick={toggleMute} />
         <HeaderButton label="Who's up" icon="stats" onClick={() => setShowStats(!showStats)} pressed={showStats} />
+        <HeaderButton
+          label={away ? "I'm back" : "Sit out"}
+          icon={away ? "play" : "pause"}
+          onClick={() => onAct({ type: away ? "sitIn" : "sitOut" })}
+        />
         <HeaderButton label="Stand up and leave" icon="stand" onClick={askToStand} />
       </TableHeader>
 
-      {(error || stuck) && (
+      {status && (
         <p role="status" className="mx-auto mt-3 rounded-full bg-black/40 px-4 py-1.5 text-sm text-cream/80 ring-1 ring-gold/30">
-          {error || "Only one player has chips left. Anyone who is out can rebuy to keep playing."}
+          {status}
         </p>
       )}
 
@@ -355,8 +331,13 @@ export function FriendTable() {
         />
       </section>
 
-      {(myTurn || busted) && (
+      {(myTurn || busted || away) && !gameOver && (
         <div className="fixed bottom-3 right-3 z-30 flex flex-col items-end gap-3 sm:bottom-5 sm:right-6">
+          {away && (
+            <button className="btn-gold anim-pop" disabled={busy} onClick={() => onAct({ type: "sitIn" })}>
+              I&apos;M BACK
+            </button>
+          )}
           {busted && (
             <button className="btn-gold anim-pop" disabled={busy} onClick={() => onAct({ type: "rebuy" })}>
               REBUY {view.stack.toLocaleString()}
@@ -368,8 +349,48 @@ export function FriendTable() {
 
       {showStats && <StatsPanel game={game} labels={labels} />}
       <LogPanel entries={logEntriesFor(game)} open={showLog} onToggle={() => setShowLog(!showLog)} hidden={myTurn} yourTurn={yourTurnLine(game, me)} />
+
+      {gameOver && !standing && (
+        <div className="anim-fade fixed inset-0 z-40 grid place-items-center bg-black/60 p-4">
+          <div className="anim-modal panel w-full max-w-md p-8 text-center sm:p-10">
+            <h2 className="font-display text-5xl font-bold text-white">GAME OVER</h2>
+            <p className="mt-3 text-xl">{winnerSeat === me ? "You take the table." : `${labels[winnerSeat] ?? "Nobody"} takes the table.`}</p>
+            <Standings game={game} labels={labels} />
+            <p className="mt-4 text-sm text-cream/70">The game carries on if anyone who is out rebuys.</p>
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              {busted && (
+                <button className="btn-gold" disabled={busy} onClick={() => onAct({ type: "rebuy" })}>
+                  REBUY {view.stack.toLocaleString()}
+                </button>
+              )}
+              <button className="btn-gold" onClick={askToStand}>
+                LEAVE TABLE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {standDialog}
     </main>
+  );
+}
+
+/** Everyone at the table, most chips won first: what they have and what they won or lost overall. */
+function Standings({ game, labels }: { game: Game; labels: string[] }) {
+  const rows = game.players.map((player, seat) => ({ seat, stack: player.stack, net: player.stack - player.buyIn }));
+  rows.sort((a, b) => b.net - a.net);
+  return (
+    <ol className="mx-auto mt-6 max-w-xs text-left">
+      {rows.map(({ seat, stack, net }) => (
+        <li key={seat} className="flex justify-between gap-4 border-t border-white/10 py-1.5">
+          <span>{labels[seat]}</span>
+          <span className="tabular-nums">
+            {stack.toLocaleString()} ({net > 0 ? "+" : ""}
+            {net.toLocaleString()})
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }
 
