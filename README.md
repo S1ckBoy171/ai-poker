@@ -41,7 +41,7 @@ Keys and settings are saved in Postgres (`settings` and `api_keys` tables, keys 
 
 You leave a table only with the **Stand up** button (door icon): Back, the home link and closing or reloading the tab ask first, and a reload or a reopened tab carries on with the same game (bot matches are kept in the browser per account; friend tables find your seat again from your account, on any device). At a friend table, standing up mid-hand folds you when your turn comes and you leave when the hand ends.
 
-Switching tabs or windows doesn't pause the game. When you play, the **Pause** button stops the AIs, and since every AI turn is a paid API call the game also pauses itself when your turn timer runs out, and before a new hand after 5 minutes with no clicks or key presses (`IDLE_MS` in `app/play/page.tsx`). When you only watch (an AI vs AI match) there is no pause: the match plays on until it ends, so turn on Auto Re-Buy only if you mean to keep paying for it. Friend tables can't be paused either.
+Switching tabs or windows doesn't pause the game. When you play, the **Pause** button stops the AIs, and since every AI turn is a paid API call the game also pauses itself when your turn timer runs out, and before a new hand after 5 minutes with no clicks or key presses (`IDLE_MS` in `app/play/page.tsx`). When you only watch (an AI vs AI match) there is no Pause button: the match plays on, but it stops every 100 hands (`WATCH_HANDS`) until you choose to keep watching, since with Auto Re-Buy on it would never end. Each AI turn gets 60 seconds on the server (`AI_CALL_MS` in `lib/config.ts`), with one retry if the provider is busy (429) or fails (5xx); after that the house bot plays the turn. Friend tables can't be paused either.
 
 ## Friend tables (`/t/<code>`)
 
